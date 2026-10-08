@@ -1,0 +1,7 @@
+/target
+.idea/
+.agents/
+.opencode/
+graphify-out
+AGENTS.md
+skills-lock.json
