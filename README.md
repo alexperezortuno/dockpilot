@@ -28,6 +28,9 @@ Completed:
 - DS-015 named local/remote Docker contexts with read-only enforcement
 - DS-016 configurable themes, shortcuts, and persisted theme preference
 - DS-017 Bollard network and volume listings with preserved action menus
+- DS-018 cancellable Docker event stream with bounded local alerts
+- DS-019 read-only disk usage reporting and cleanup previews
+- DS-020 guarded volume backup/restore with consistency warnings
 
 The current TUI provides dashboard, container, image, network, volume, project, and help tabs. Legacy Docker Machine support was removed; use Docker contexts for local, TCP, or SSH engines.
 
@@ -54,7 +57,7 @@ cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-Current validation includes 26 unit tests covering application navigation, bounded output, network/volume listing dispatch, theme and shortcut configuration, context endpoint parsing, image listing dispatch, Compose profile dispatch, dashboard requests, container filtering and inspection, bounded logs, configuration precedence, terminal restoration, safe command arguments, task cancellation, lifecycle policy, and engine status.
+Current validation includes 29 unit tests covering application navigation, guarded volume backup dispatch, disk usage policy, bounded output/events/alerts, network/volume listing dispatch, theme and shortcut configuration, context endpoint parsing, image listing dispatch, Compose profile dispatch, dashboard requests, container filtering and inspection, bounded logs, configuration precedence, terminal restoration, safe command arguments, task cancellation, lifecycle policy, and engine status.
 
 Task concurrency design and the current serialization decision are documented in `TASK_CONCURRENCY.md`.
 
@@ -105,10 +108,14 @@ Theme changes are cycled with the configured theme shortcut and saved to `dockpi
 | `t` | Cycle theme |
 | `n` | Refresh network listing |
 | `v` | Refresh volume listing |
+| `e` | Start or cancel Docker event streaming |
+| `u` | Show Docker disk usage |
+| `k` | Preview cleanup without mutating resources |
 | `q` / `Esc` | Quit |
 | `Ctrl+C` | Quit |
 
 During a confirmation prompt, press `y` to continue or `n` / `Esc` to cancel.
+The `f` filter applies to the current resource table (containers, images, networks, or volumes). To clear it, open the filter prompt and press `Enter` with an empty value.
 
 When the container table has focus, `Enter` inspects the selected container. Lifecycle mutations use Bollard and still pass through safe-mode confirmation and read-only policy checks.
 
@@ -129,7 +136,7 @@ When the container table has focus, `Enter` inspects the selected container. Lif
 - **Volume**: list, create, and remove Docker volumes.
 - **Project**: set the project folder, run Compose up/down/config, and start with a selected Compose profile.
 - **Network**: list networks through Bollard, create, and remove networks.
-- **Volume**: list volumes through Bollard, create, and remove volumes.
+- **Volume**: list volumes through Bollard, create/remove, and guarded backup/restore volumes using `volume|archive-path` input.
 - **Help**: keyboard reference.
 
 ## Architecture
