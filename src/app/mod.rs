@@ -372,16 +372,25 @@ impl App {
         self.container_table_state.select(Some(0));
     }
 
+    #[cfg(test)]
     pub fn start_container_filter(&mut self) {
         self.start_input("Filtro de contenedores:", PendingAction::ContainerFilter);
     }
 
     pub fn start_filter(&mut self) {
         match self.current_tab {
-            Tab::Container => self.start_input("Filtro de contenedores:", PendingAction::ContainerFilter),
-            Tab::Image => self.start_input("Filtro de imagenes:", PendingAction::ImageFilter),
-            Tab::Network => self.start_input("Filtro de redes:", PendingAction::NetworkFilter),
-            Tab::Volume => self.start_input("Filtro de volumenes:", PendingAction::VolumeFilter),
+            Tab::Container => {
+                self.start_input("Filtro de contenedores:", PendingAction::ContainerFilter);
+            }
+            Tab::Image => {
+                self.start_input("Filtro de imagenes:", PendingAction::ImageFilter);
+            }
+            Tab::Network => {
+                self.start_input("Filtro de redes:", PendingAction::NetworkFilter);
+            }
+            Tab::Volume => {
+                self.start_input("Filtro de volumenes:", PendingAction::VolumeFilter);
+            }
             _ => {}
         }
     }
@@ -562,21 +571,24 @@ impl App {
             }
             Tab::Image => {
                 if self.image_table_focus {
-                    Self::next_in_table(&mut self.image_table_state, self.filtered_images().len());
+                    let len = self.filtered_images().len();
+                    Self::next_in_table(&mut self.image_table_state, len);
                 } else {
                     Self::next_in_list(&mut self.image_list_state, self.image_actions.len());
                 }
             }
             Tab::Network => {
                 if self.network_table_focus {
-                    Self::next_in_table(&mut self.network_table_state, self.filtered_networks().len());
+                    let len = self.filtered_networks().len();
+                    Self::next_in_table(&mut self.network_table_state, len);
                 } else {
                     Self::next_in_list(&mut self.network_list_state, self.network_actions.len());
                 }
             }
             Tab::Volume => {
                 if self.volume_table_focus {
-                    Self::next_in_table(&mut self.volume_table_state, self.filtered_volumes().len());
+                    let len = self.filtered_volumes().len();
+                    Self::next_in_table(&mut self.volume_table_state, len);
                 } else {
                     Self::next_in_list(&mut self.volume_list_state, self.volume_actions.len());
                 }
@@ -604,14 +616,16 @@ impl App {
             }
             Tab::Image => {
                 if self.image_table_focus {
-                    Self::previous_in_table(&mut self.image_table_state, self.filtered_images().len());
+                    let len = self.filtered_images().len();
+                    Self::previous_in_table(&mut self.image_table_state, len);
                 } else {
                     Self::previous_in_list(&mut self.image_list_state, self.image_actions.len());
                 }
             }
             Tab::Network => {
                 if self.network_table_focus {
-                    Self::previous_in_table(&mut self.network_table_state, self.filtered_networks().len());
+                    let len = self.filtered_networks().len();
+                    Self::previous_in_table(&mut self.network_table_state, len);
                 } else {
                     Self::previous_in_list(
                         &mut self.network_list_state,
@@ -621,7 +635,8 @@ impl App {
             }
             Tab::Volume => {
                 if self.volume_table_focus {
-                    Self::previous_in_table(&mut self.volume_table_state, self.filtered_volumes().len());
+                    let len = self.filtered_volumes().len();
+                    Self::previous_in_table(&mut self.volume_table_state, len);
                 } else {
                     Self::previous_in_list(&mut self.volume_list_state, self.volume_actions.len());
                 }
