@@ -3,6 +3,9 @@
 # Compose project folder and Docker working directory.
 project_folder = "."
 
+# Docker context name. Omit for the default context.
+# docker_context = "default"
+
 # TUI event polling interval. Valid range: 10..=5000 milliseconds.
 poll_interval_ms = 50
 
