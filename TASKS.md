@@ -7,7 +7,7 @@
 - [x] DS-004: Replace `sh -c` with typed, explicit argument execution; test metacharacters and paths with spaces.
 - [x] DS-005: Introduce Tokio tasks, bounded channels, progress and cancellation; prove navigation stays responsive.
 - [x] DS-006: Add validated TOML configuration, defaults, precedence and example file.
-- [ ] DS-007: Add destructive-action confirmation and read-only context enforcement.
+- [x] DS-007: Add destructive-action confirmation and read-only context enforcement.
 
 ## P1
 - [ ] DS-008: Bollard Docker Engine connection and disconnected state.
