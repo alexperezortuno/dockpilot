@@ -27,10 +27,11 @@ Completed:
 - DS-014 Bollard image listing with task progress for image operations
 - DS-015 named local/remote Docker contexts with read-only enforcement
 - DS-016 configurable themes, shortcuts, and persisted theme preference
+- DS-017 Bollard network and volume listings with preserved action menus
 
-The current TUI preserves the original tabbed interface for containers, images, networks, volumes, projects, machines, and help.
+The current TUI provides dashboard, container, image, network, volume, project, and help tabs. Legacy Docker Machine support was removed; use Docker contexts for local, TCP, or SSH engines.
 
-> Important: The dedicated log buffer is bounded to 2,000 lines; general command output is not bounded yet. Safety policy is configured at startup; safe mode confirms mutations, destructive actions always require confirmation, and read-only mode blocks mutations.
+> Important: The dedicated log buffer is bounded to 2,000 lines, and general command output uses the configured bounded `VecDeque`. Safety policy is configured at startup; safe mode confirms mutations, destructive actions always require confirmation, and read-only mode blocks mutations.
 
 ## Requirements
 
@@ -53,7 +54,9 @@ cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-Current validation includes 24 unit tests covering application navigation, theme and shortcut configuration, context endpoint parsing, image listing dispatch, Compose profile dispatch, dashboard requests, container filtering and inspection, bounded logs, configuration precedence, terminal restoration, safe command arguments, task cancellation, lifecycle policy, and engine status.
+Current validation includes 26 unit tests covering application navigation, bounded output, network/volume listing dispatch, theme and shortcut configuration, context endpoint parsing, image listing dispatch, Compose profile dispatch, dashboard requests, container filtering and inspection, bounded logs, configuration precedence, terminal restoration, safe command arguments, task cancellation, lifecycle policy, and engine status.
+
+Task concurrency design and the current serialization decision are documented in `TASK_CONCURRENCY.md`.
 
 ## Configuration
 
@@ -70,6 +73,7 @@ Supported environment variables and CLI flags:
 | --- | --- | --- |
 | Project folder | `DOCKPILOT_PROJECT_FOLDER` | `--project-folder PATH` |
 | Poll interval | `DOCKPILOT_POLL_INTERVAL_MS` | `--poll-interval-ms MILLISECONDS` |
+| Output capacity | `DOCKPILOT_OUTPUT_CAPACITY` | `--output-capacity LINES` |
 | Safe mode | `DOCKPILOT_SAFE_MODE` | `--safe-mode BOOL` |
 | Read-only mode | `DOCKPILOT_READ_ONLY` | `--read-only BOOL` |
 | Docker context | `DOCKPILOT_DOCKER_CONTEXT` | `--docker-context NAME` |
@@ -99,6 +103,8 @@ Theme changes are cycled with the configured theme shortcut and saved to `dockpi
 | `d` | Refresh dashboard data |
 | `i` | Refresh image listing |
 | `t` | Cycle theme |
+| `n` | Refresh network listing |
+| `v` | Refresh volume listing |
 | `q` / `Esc` | Quit |
 | `Ctrl+C` | Quit |
 
@@ -122,7 +128,8 @@ When the container table has focus, `Enter` inspects the selected container. Lif
 - **Network**: list, create, and remove Docker networks.
 - **Volume**: list, create, and remove Docker volumes.
 - **Project**: set the project folder, run Compose up/down/config, and start with a selected Compose profile.
-- **Machine**: Docker Machine operations.
+- **Network**: list networks through Bollard, create, and remove networks.
+- **Volume**: list volumes through Bollard, create, and remove volumes.
 - **Help**: keyboard reference.
 
 ## Architecture
@@ -130,7 +137,7 @@ When the container table has focus, `Enter` inspects the selected container. Lif
 ```text
 src/
   main.rs       Terminal setup and event loop
-  app/          Application state, navigation, input, and actions
+  app/          Application state, navigation, output buffering, input, and actions
   docker/       Docker command execution and Bollard engine connection
   tasks/        Tokio task manager and bounded task events
   tui/          Ratatui rendering
