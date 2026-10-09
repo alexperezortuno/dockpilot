@@ -31,6 +31,7 @@ Completed:
 - DS-018 cancellable Docker event stream with bounded local alerts
 - DS-019 read-only disk usage reporting and cleanup previews
 - DS-020 guarded volume backup/restore with consistency warnings
+- DS-021 noninteractive JSON query CLI
 
 The current TUI provides dashboard, container, image, network, volume, project, and help tabs. Legacy Docker Machine support was removed; use Docker contexts for local, TCP, or SSH engines.
 
@@ -57,7 +58,21 @@ cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-Current validation includes 29 unit tests covering application navigation, guarded volume backup dispatch, disk usage policy, bounded output/events/alerts, network/volume listing dispatch, theme and shortcut configuration, context endpoint parsing, image listing dispatch, Compose profile dispatch, dashboard requests, container filtering and inspection, bounded logs, configuration precedence, terminal restoration, safe command arguments, task cancellation, lifecycle policy, and engine status.
+Current validation includes 31 unit tests covering application navigation, JSON query dispatch, guarded volume backup dispatch, disk usage policy, bounded output/events/alerts, network/volume listing dispatch, theme and shortcut configuration, context endpoint parsing, image listing dispatch, Compose profile dispatch, dashboard requests, container filtering and inspection, bounded logs, configuration precedence, terminal restoration, safe command arguments, task cancellation, lifecycle policy, and engine status.
+
+## JSON CLI
+
+Use `--json` with one read-only query. The command exits without starting the TUI:
+
+```bash
+dockpilot --json --list-containers
+dockpilot --json --list-images
+dockpilot --json --list-networks
+dockpilot --json --list-volumes
+dockpilot --json --dashboard
+```
+
+JSON mode is query-only. Mutations continue to require the interactive safety and read-only policy path.
 
 Task concurrency design and the current serialization decision are documented in `TASK_CONCURRENCY.md`.
 
