@@ -1,5 +1,6 @@
-use crate::docker::CommandSpec;
+use crate::{docker::CommandSpec, tasks::TaskRequest};
 use ratatui::widgets::ListState;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub enum ContainerAction {
@@ -129,7 +130,14 @@ pub struct App {
 }
 
 impl App {
+    #[cfg(test)]
     pub fn new() -> Self {
+        let project_folder = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        Self::with_project_folder(project_folder)
+    }
+
+    pub fn with_project_folder(project_folder: PathBuf) -> Self {
+        let project_folder = project_folder.to_string_lossy().to_string();
         let mut app = App {
             current_tab: Tab::Container,
             container_actions: vec![
@@ -186,9 +194,7 @@ impl App {
             project_list_state: ListState::default(),
             machine_list_state: ListState::default(),
             output_scroll: 0,
-            project_folder: std::env::current_dir()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| ".".to_string()),
+            project_folder,
             input_mode: false,
             input_buffer: String::new(),
             input_prompt: String::new(),
@@ -203,6 +209,16 @@ impl App {
         app.machine_list_state.select(Some(0));
 
         app
+    }
+
+    pub fn push_output(&mut self, line: impl Into<String>) {
+        self.output_lines.push(line.into());
+        self.output_scroll = self.output_lines.len() as u16;
+    }
+
+    pub fn append_output(&mut self, lines: impl IntoIterator<Item = String>) {
+        self.output_lines.extend(lines);
+        self.output_scroll = self.output_lines.len() as u16;
     }
 
     // --- Generic navigation ---
@@ -305,11 +321,12 @@ impl App {
     }
 
     // --- Input mode ---
-    fn start_input(&mut self, prompt: &str, action: PendingAction) {
+    fn start_input(&mut self, prompt: &str, action: PendingAction) -> Option<TaskRequest> {
         self.input_mode = true;
         self.input_buffer.clear();
         self.input_prompt = prompt.to_string();
         self.pending_action = Some(action);
+        None
     }
 
     pub fn cancel_input(&mut self) {
@@ -319,7 +336,7 @@ impl App {
         self.pending_action = None;
     }
 
-    pub fn confirm_input(&mut self) {
+    pub fn confirm_input(&mut self) -> Option<TaskRequest> {
         let value = self.input_buffer.trim().to_string();
         let action = self.pending_action.take();
         self.input_mode = false;
@@ -329,68 +346,60 @@ impl App {
         if value.is_empty() {
             self.output_lines
                 .push("[entrada cancelada: valor vacío]".to_string());
-            return;
+            return None;
         }
 
         if let Some(action) = action {
-            self.execute_pending_action(action, &value);
+            return self.execute_pending_action(action, &value);
         }
+
+        None
     }
 
-    fn execute_pending_action(&mut self, action: PendingAction, value: &str) {
+    fn execute_pending_action(
+        &mut self,
+        action: PendingAction,
+        value: &str,
+    ) -> Option<TaskRequest> {
         match action {
             // Container
-            PendingAction::ContainerLogs => {
-                self.execute_command(
-                    CommandSpec::new("docker")
-                        .args(["logs", "--tail", "100"])
-                        .arg(value),
-                );
-            }
-            PendingAction::ContainerTop => {
-                self.execute_command(
-                    CommandSpec::new("docker")
-                        .args(["container", "top"])
-                        .arg(value),
-                );
-            }
-            PendingAction::ContainerDiff => {
-                self.execute_command(
-                    CommandSpec::new("docker")
-                        .args(["container", "diff"])
-                        .arg(value),
-                );
-            }
-            PendingAction::ContainerPause => {
-                self.execute_command(
-                    CommandSpec::new("docker")
-                        .args(["container", "pause"])
-                        .arg(value),
-                );
-            }
-            PendingAction::ContainerUnpause => {
-                self.execute_command(
-                    CommandSpec::new("docker")
-                        .args(["container", "unpause"])
-                        .arg(value),
-                );
-            }
-            PendingAction::ContainerUpdate => {
-                self.execute_command(
-                    CommandSpec::new("docker")
-                        .args(["container", "update", "--memory=512m"])
-                        .arg(value),
-                );
-            }
-            PendingAction::ContainerWait => {
-                self.execute_command(
-                    CommandSpec::new("docker")
-                        .args(["container", "wait"])
-                        .arg(value),
-                );
-            }
+            PendingAction::ContainerLogs => self.execute_command(
+                CommandSpec::new("docker")
+                    .args(["logs", "--tail", "100"])
+                    .arg(value),
+            ),
+            PendingAction::ContainerTop => self.execute_command(
+                CommandSpec::new("docker")
+                    .args(["container", "top"])
+                    .arg(value),
+            ),
+            PendingAction::ContainerDiff => self.execute_command(
+                CommandSpec::new("docker")
+                    .args(["container", "diff"])
+                    .arg(value),
+            ),
+            PendingAction::ContainerPause => self.execute_command(
+                CommandSpec::new("docker")
+                    .args(["container", "pause"])
+                    .arg(value),
+            ),
+            PendingAction::ContainerUnpause => self.execute_command(
+                CommandSpec::new("docker")
+                    .args(["container", "unpause"])
+                    .arg(value),
+            ),
+            PendingAction::ContainerUpdate => self.execute_command(
+                CommandSpec::new("docker")
+                    .args(["container", "update", "--memory=512m"])
+                    .arg(value),
+            ),
+            PendingAction::ContainerWait => self.execute_command(
+                CommandSpec::new("docker")
+                    .args(["container", "wait"])
+                    .arg(value),
+            ),
             PendingAction::ContainerRemove => {
-                self.execute_command(CommandSpec::new("docker").args(["rm", "-f"]).arg(value));
+                self.execute_command(CommandSpec::new("docker").args(["rm", "-f"]).arg(value))
             }
             PendingAction::ContainerCreate => {
                 // value = "image name" e.g. "test nginx"
@@ -404,39 +413,37 @@ impl App {
                         .arg(name)
                         .args(["-p", "83:83"])
                         .arg(image),
-                );
+                )
             }
             // Image
             PendingAction::ImageRemove => {
-                self.execute_command(CommandSpec::new("docker").args(["rmi"]).arg(value));
+                self.execute_command(CommandSpec::new("docker").args(["rmi"]).arg(value))
             }
             PendingAction::ImagePush => {
-                self.execute_command(CommandSpec::new("docker").args(["push"]).arg(value));
+                self.execute_command(CommandSpec::new("docker").args(["push"]).arg(value))
             }
             PendingAction::ImagePull => {
-                self.execute_command(CommandSpec::new("docker").args(["pull"]).arg(value));
+                self.execute_command(CommandSpec::new("docker").args(["pull"]).arg(value))
             }
-            PendingAction::ImageSave => {
-                self.execute_command(
-                    CommandSpec::new("docker")
-                        .args(["save"])
-                        .arg(value)
-                        .stdout_file("image.tar"),
-                );
-            }
+            PendingAction::ImageSave => self.execute_command(
+                CommandSpec::new("docker")
+                    .args(["save"])
+                    .arg(value)
+                    .stdout_file("image.tar"),
+            ),
             PendingAction::ImageLoad => {
                 // value = path to the tar file, defaults to image.tar
-                self.execute_command(CommandSpec::new("docker").args(["load"]).stdin_file(value));
+                self.execute_command(CommandSpec::new("docker").args(["load"]).stdin_file(value))
             }
             PendingAction::ImageHistory => {
-                self.execute_command(CommandSpec::new("docker").args(["history"]).arg(value));
+                self.execute_command(CommandSpec::new("docker").args(["history"]).arg(value))
             }
             PendingAction::ImageBuild => {
                 // value = "tag context"  p.ej. "myimage ."
                 let mut parts = value.splitn(2, ' ');
                 let tag = parts.next().unwrap_or("myimage");
                 let ctx = parts.next().unwrap_or(".");
-                self.execute_command(CommandSpec::new("docker").args(["build", "-t", tag, ctx]));
+                self.execute_command(CommandSpec::new("docker").args(["build", "-t", tag, ctx]))
             }
             PendingAction::ImageRebuild => {
                 let mut parts = value.splitn(2, ' ');
@@ -448,33 +455,27 @@ impl App {
                     "-t",
                     tag,
                     ctx,
-                ]));
+                ]))
             }
             // Network
-            PendingAction::NetworkCreate => {
-                self.execute_command(
-                    CommandSpec::new("docker")
-                        .args(["network", "create"])
-                        .arg(value),
-                );
-            }
-            PendingAction::NetworkRemove => {
-                self.execute_command(
-                    CommandSpec::new("docker")
-                        .args(["network", "rm"])
-                        .arg(value),
-                );
-            }
+            PendingAction::NetworkCreate => self.execute_command(
+                CommandSpec::new("docker")
+                    .args(["network", "create"])
+                    .arg(value),
+            ),
+            PendingAction::NetworkRemove => self.execute_command(
+                CommandSpec::new("docker")
+                    .args(["network", "rm"])
+                    .arg(value),
+            ),
             // Volume
-            PendingAction::VolumeCreate => {
-                self.execute_command(
-                    CommandSpec::new("docker")
-                        .args(["volume", "create"])
-                        .arg(value),
-                );
-            }
+            PendingAction::VolumeCreate => self.execute_command(
+                CommandSpec::new("docker")
+                    .args(["volume", "create"])
+                    .arg(value),
+            ),
             PendingAction::VolumeRemove => {
-                self.execute_command(CommandSpec::new("docker").args(["volume", "rm"]).arg(value));
+                self.execute_command(CommandSpec::new("docker").args(["volume", "rm"]).arg(value))
             }
             // Project
             PendingAction::ProjectSetFolder => {
@@ -482,154 +483,136 @@ impl App {
                 let folder = self.project_folder.clone();
                 self.output_lines
                     .push(format!("[proyecto] carpeta establecida: {}", folder));
-                self.execute_command(CommandSpec::new("ls").args(["-la"]).arg(folder));
+                self.execute_command(CommandSpec::new("ls").args(["-la"]).arg(folder))
             }
         }
     }
 
     // --- Command executions ---
-    fn execute_command(&mut self, command: CommandSpec) {
-        crate::docker::execute_command(&mut self.output_lines, &mut self.output_scroll, command);
+    fn execute_command(&mut self, command: CommandSpec) -> Option<TaskRequest> {
+        Some(TaskRequest::Command(command))
     }
 
-    fn execute_compose(&mut self, args: &[&str]) {
+    fn execute_compose(&mut self, args: &[&str]) -> Option<TaskRequest> {
         let project_folder = self.project_folder.clone();
         self.execute_command(
             CommandSpec::new("docker")
                 .args(args)
                 .current_dir(project_folder),
-        );
+        )
     }
 
     // --- Tab actions ---
-    fn run_container_action(&mut self, action: &ContainerAction) {
+    fn run_container_action(&mut self, action: &ContainerAction) -> Option<TaskRequest> {
         match action {
             ContainerAction::Start => self.execute_compose(&["compose", "up", "-d"]),
-            ContainerAction::StopAll => {
-                crate::docker::stop_all(&mut self.output_lines, &mut self.output_scroll)
-            }
+            ContainerAction::StopAll => Some(TaskRequest::StopAll),
             ContainerAction::Stop => self.execute_compose(&["compose", "stop"]),
             ContainerAction::ListAll => {
                 self.execute_command(CommandSpec::new("docker").args(["ps", "-a"]))
             }
             ContainerAction::List => self.execute_command(CommandSpec::new("docker").args(["ps"])),
             ContainerAction::Logs => {
-                self.start_input("Contenedor para ver logs:", PendingAction::ContainerLogs);
+                self.start_input("Contenedor para ver logs:", PendingAction::ContainerLogs)
             }
-            ContainerAction::Create => {
-                self.start_input(
-                    "Nombre e imagen (ej: test nginx):",
-                    PendingAction::ContainerCreate,
-                );
-            }
-            ContainerAction::Remove => {
-                self.start_input(
-                    "Contenedor a eliminar (ID o nombre):",
-                    PendingAction::ContainerRemove,
-                );
-            }
+            ContainerAction::Create => self.start_input(
+                "Nombre e imagen (ej: test nginx):",
+                PendingAction::ContainerCreate,
+            ),
+            ContainerAction::Remove => self.start_input(
+                "Contenedor a eliminar (ID o nombre):",
+                PendingAction::ContainerRemove,
+            ),
             ContainerAction::Top => {
-                self.start_input("Contenedor para top:", PendingAction::ContainerTop);
+                self.start_input("Contenedor para top:", PendingAction::ContainerTop)
             }
             ContainerAction::Diff => {
-                self.start_input("Contenedor para diff:", PendingAction::ContainerDiff);
+                self.start_input("Contenedor para diff:", PendingAction::ContainerDiff)
             }
             ContainerAction::Pause => {
-                self.start_input("Contenedor a pausar:", PendingAction::ContainerPause);
+                self.start_input("Contenedor a pausar:", PendingAction::ContainerPause)
             }
             ContainerAction::Unpause => {
-                self.start_input("Contenedor a reanudar:", PendingAction::ContainerUnpause);
+                self.start_input("Contenedor a reanudar:", PendingAction::ContainerUnpause)
             }
             ContainerAction::Update => {
-                self.start_input("Contenedor a actualizar:", PendingAction::ContainerUpdate);
+                self.start_input("Contenedor a actualizar:", PendingAction::ContainerUpdate)
             }
             ContainerAction::Wait => {
-                self.start_input("Contenedor a esperar:", PendingAction::ContainerWait);
+                self.start_input("Contenedor a esperar:", PendingAction::ContainerWait)
             }
         }
     }
 
-    fn run_image_action(&mut self, action: &ImageAction) {
+    fn run_image_action(&mut self, action: &ImageAction) -> Option<TaskRequest> {
         match action {
             ImageAction::Build => {
-                self.start_input("Tag y contexto (ej: myimage .):", PendingAction::ImageBuild);
+                self.start_input("Tag y contexto (ej: myimage .):", PendingAction::ImageBuild)
             }
-            ImageAction::Rebuild => {
-                self.start_input(
-                    "Tag y contexto (ej: myimage .):",
-                    PendingAction::ImageRebuild,
-                );
-            }
+            ImageAction::Rebuild => self.start_input(
+                "Tag y contexto (ej: myimage .):",
+                PendingAction::ImageRebuild,
+            ),
             ImageAction::List => {
                 self.execute_command(CommandSpec::new("docker").args(["image", "list"]))
             }
-            ImageAction::Remove => {
-                self.start_input(
-                    "Imagen a eliminar (ID o nombre):",
-                    PendingAction::ImageRemove,
-                );
-            }
+            ImageAction::Remove => self.start_input(
+                "Imagen a eliminar (ID o nombre):",
+                PendingAction::ImageRemove,
+            ),
             ImageAction::Push => {
-                self.start_input("Imagen a subir (tag):", PendingAction::ImagePush);
+                self.start_input("Imagen a subir (tag):", PendingAction::ImagePush)
             }
-            ImageAction::Pull => {
-                self.start_input("Imagen a descargar:", PendingAction::ImagePull);
-            }
-            ImageAction::Save => {
-                self.start_input("Imagen a guardar:", PendingAction::ImageSave);
-            }
+            ImageAction::Pull => self.start_input("Imagen a descargar:", PendingAction::ImagePull),
+            ImageAction::Save => self.start_input("Imagen a guardar:", PendingAction::ImageSave),
             ImageAction::Load => {
-                self.start_input("Ruta del tar (ej: image.tar):", PendingAction::ImageLoad);
+                self.start_input("Ruta del tar (ej: image.tar):", PendingAction::ImageLoad)
             }
             ImageAction::History => {
-                self.start_input("Imagen a inspeccionar:", PendingAction::ImageHistory);
+                self.start_input("Imagen a inspeccionar:", PendingAction::ImageHistory)
             }
         }
     }
 
-    fn run_network_action(&mut self, action: &NetworkAction) {
+    fn run_network_action(&mut self, action: &NetworkAction) -> Option<TaskRequest> {
         match action {
             NetworkAction::List => {
                 self.execute_command(CommandSpec::new("docker").args(["network", "ls"]))
             }
             NetworkAction::Create => {
-                self.start_input("Nombre de la nueva red:", PendingAction::NetworkCreate);
+                self.start_input("Nombre de la nueva red:", PendingAction::NetworkCreate)
             }
             NetworkAction::Remove => {
-                self.start_input("Nombre de la red a eliminar:", PendingAction::NetworkRemove);
+                self.start_input("Nombre de la red a eliminar:", PendingAction::NetworkRemove)
             }
         }
     }
 
-    fn run_volume_action(&mut self, action: &VolumeAction) {
+    fn run_volume_action(&mut self, action: &VolumeAction) -> Option<TaskRequest> {
         match action {
             VolumeAction::List => {
                 self.execute_command(CommandSpec::new("docker").args(["volume", "ls"]))
             }
             VolumeAction::Create => {
-                self.start_input("Nombre del nuevo volumen:", PendingAction::VolumeCreate);
+                self.start_input("Nombre del nuevo volumen:", PendingAction::VolumeCreate)
             }
-            VolumeAction::Remove => {
-                self.start_input(
-                    "Nombre del volumen a eliminar:",
-                    PendingAction::VolumeRemove,
-                );
-            }
+            VolumeAction::Remove => self.start_input(
+                "Nombre del volumen a eliminar:",
+                PendingAction::VolumeRemove,
+            ),
         }
     }
 
-    fn run_project_action(&mut self, action: &ProjectAction) {
+    fn run_project_action(&mut self, action: &ProjectAction) -> Option<TaskRequest> {
         match action {
-            ProjectAction::SetFolder => {
-                self.start_input(
-                    "Ruta de la carpeta del proyecto:",
-                    PendingAction::ProjectSetFolder,
-                );
-            }
+            ProjectAction::SetFolder => self.start_input(
+                "Ruta de la carpeta del proyecto:",
+                PendingAction::ProjectSetFolder,
+            ),
         }
     }
 
-    fn run_machine_action(&mut self, action: &MachineAction) {
+    fn run_machine_action(&mut self, action: &MachineAction) -> Option<TaskRequest> {
         match action {
             MachineAction::List => {
                 self.execute_command(CommandSpec::new("docker-machine").args(["ls"]))
@@ -641,7 +624,7 @@ impl App {
                 self.execute_command(CommandSpec::new("docker-machine").args(["stop", "default"]))
             }
             MachineAction::Env | MachineAction::Eval => {
-                self.execute_command(CommandSpec::new("docker-machine").args(["env", "default"]));
+                self.execute_command(CommandSpec::new("docker-machine").args(["env", "default"]))
             }
             MachineAction::Ip => {
                 self.execute_command(CommandSpec::new("docker-machine").args(["ip", "default"]))
@@ -649,51 +632,57 @@ impl App {
         }
     }
 
-    pub fn execute_selected(&mut self) {
+    pub fn execute_selected(&mut self) -> Option<TaskRequest> {
         match self.current_tab {
             Tab::Container => {
                 if let Some(i) = self.container_list_state.selected()
                     && let Some(action) = self.container_actions.get(i).cloned()
                 {
-                    self.run_container_action(&action);
+                    return self.run_container_action(&action);
                 }
+                None
             }
             Tab::Image => {
                 if let Some(i) = self.image_list_state.selected()
                     && let Some(action) = self.image_actions.get(i).cloned()
                 {
-                    self.run_image_action(&action);
+                    return self.run_image_action(&action);
                 }
+                None
             }
             Tab::Network => {
                 if let Some(i) = self.network_list_state.selected()
                     && let Some(action) = self.network_actions.get(i).cloned()
                 {
-                    self.run_network_action(&action);
+                    return self.run_network_action(&action);
                 }
+                None
             }
             Tab::Volume => {
                 if let Some(i) = self.volume_list_state.selected()
                     && let Some(action) = self.volume_actions.get(i).cloned()
                 {
-                    self.run_volume_action(&action);
+                    return self.run_volume_action(&action);
                 }
+                None
             }
             Tab::Project => {
                 if let Some(i) = self.project_list_state.selected()
                     && let Some(action) = self.project_actions.get(i).cloned()
                 {
-                    self.run_project_action(&action);
+                    return self.run_project_action(&action);
                 }
+                None
             }
             Tab::Machine => {
                 if let Some(i) = self.machine_list_state.selected()
                     && let Some(action) = self.machine_actions.get(i).cloned()
                 {
-                    self.run_machine_action(&action);
+                    return self.run_machine_action(&action);
                 }
+                None
             }
-            Tab::Help => {}
+            Tab::Help => None,
         }
     }
 }
