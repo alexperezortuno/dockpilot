@@ -61,6 +61,10 @@ pub enum VolumeAction {
 #[derive(Debug, Clone)]
 pub enum ProjectAction {
     SetFolder,
+    ComposeUp,
+    ComposeUpProfile,
+    ComposeDown,
+    ComposeConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -127,6 +131,7 @@ pub enum PendingAction {
     VolumeRemove,
     // Project
     ProjectSetFolder,
+    ComposeProfileUp,
 }
 
 pub struct App {
@@ -213,7 +218,13 @@ impl App {
                 VolumeAction::Create,
                 VolumeAction::Remove,
             ],
-            project_actions: vec![ProjectAction::SetFolder],
+            project_actions: vec![
+                ProjectAction::SetFolder,
+                ProjectAction::ComposeUp,
+                ProjectAction::ComposeUpProfile,
+                ProjectAction::ComposeDown,
+                ProjectAction::ComposeConfig,
+            ],
             machine_actions: vec![
                 MachineAction::List,
                 MachineAction::Start,
@@ -691,6 +702,9 @@ impl App {
                     .push(format!("[proyecto] carpeta establecida: {}", folder));
                 self.execute_command(CommandSpec::new("ls").args(["-la"]).arg(folder))
             }
+            PendingAction::ComposeProfileUp => {
+                self.execute_compose(&["compose", "--profile", value, "up", "-d"])
+            }
         }
     }
 
@@ -727,12 +741,29 @@ impl App {
         })
     }
 
-    #[allow(dead_code)]
     fn execute_compose(&mut self, args: &[&str]) -> Option<TaskRequest> {
         let project_folder = self.project_folder.clone();
         self.execute_mutating_command(
             CommandSpec::new("docker")
                 .args(args)
+                .current_dir(project_folder),
+        )
+    }
+
+    fn execute_compose_read_only(&mut self, args: &[&str]) -> Option<TaskRequest> {
+        let project_folder = self.project_folder.clone();
+        self.execute_command(
+            CommandSpec::new("docker")
+                .args(args)
+                .current_dir(project_folder),
+        )
+    }
+
+    fn execute_compose_down(&mut self) -> Option<TaskRequest> {
+        let project_folder = self.project_folder.clone();
+        self.execute_destructive_command(
+            CommandSpec::new("docker")
+                .args(["compose", "down"])
                 .current_dir(project_folder),
         )
     }
@@ -852,6 +883,12 @@ impl App {
                 "Ruta de la carpeta del proyecto:",
                 PendingAction::ProjectSetFolder,
             ),
+            ProjectAction::ComposeUp => self.execute_compose(&["compose", "up", "-d"]),
+            ProjectAction::ComposeUpProfile => {
+                self.start_input("Perfil Compose:", PendingAction::ComposeProfileUp)
+            }
+            ProjectAction::ComposeDown => self.execute_compose_down(),
+            ProjectAction::ComposeConfig => self.execute_compose_read_only(&["compose", "config"]),
         }
     }
 
@@ -1094,5 +1131,18 @@ mod tests {
                 operation: ContainerLifecycle::Stop
             } if id == "web"
         ));
+    }
+
+    #[test]
+    fn compose_profile_action_creates_a_mutating_request() {
+        let mut app = App::new();
+        app.current_tab = Tab::Project;
+        app.project_list_state.select(Some(2));
+        app.execute_selected();
+        app.input_buffer = "dev".to_string();
+
+        let request = app.confirm_input().expect("compose profile request");
+
+        assert_eq!(request.mutation(), Mutation::Mutating);
     }
 }
