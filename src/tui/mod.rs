@@ -177,6 +177,10 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
                 .map(|a| {
                     let s = match a {
                         ProjectAction::SetFolder => "Set Project Folder",
+                        ProjectAction::ComposeUp => "Compose Up",
+                        ProjectAction::ComposeUpProfile => "Compose Up (Profile)",
+                        ProjectAction::ComposeDown => "Compose Down",
+                        ProjectAction::ComposeConfig => "Compose Config",
                     };
                     ListItem::new(s)
                 })
