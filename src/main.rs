@@ -27,18 +27,18 @@ fn dispatch_request(
     let description = request.description();
     if !policy.allows(mutation) {
         app.push_output(format!(
-            "[bloqueado: contexto de solo lectura: {}]",
+            "[blocked: read-only context: {}]",
             description
         ));
         return;
     }
     if !confirmed && policy.requires_confirmation(mutation) {
-        app.push_output(format!("[confirmación requerida: {} (y/n)]", description));
+        app.push_output(format!("[confirmation required: {} (y/n)]", description));
         *pending_confirmation = Some(request);
         return;
     }
     if !task_manager.spawn(request) {
-        app.push_output("[tarea ocupada: pulse x para cancelar]");
+        app.push_output("[Task in progress: press x to cancel]");
     }
 }
 
@@ -70,10 +70,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         while let Some(task_event) = task_manager.try_next() {
             match task_event {
                 TaskEvent::Started { id } => {
-                    app.push_output(format!("[tarea {} iniciada]", id));
+                    app.push_output(format!("[task {} started]", id));
                 }
                 TaskEvent::Progress { id, message } => {
-                    app.push_output(format!("[tarea {}] {}", id, message));
+                    app.push_output(format!("[task {}] {}", id, message));
                 }
                 TaskEvent::Finished { id, lines } => {
                     app.append_output(lines);
@@ -84,9 +84,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     app.set_containers(containers);
                     app.push_output(format!("[docker] loaded {} containers", count));
                     task_manager.complete(id);
+                    if task_manager.has_client() {
+                        task_manager.spawn(app.dashboard_request());
+                    }
                 }
                 TaskEvent::LogLine { line } => {
                     app.push_log_line(line);
+                }
+                TaskEvent::Dashboard { id, data } => {
+                    app.set_dashboard(data);
+                    task_manager.complete(id);
                 }
             }
         }
@@ -114,7 +121,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                         pending_confirmation = None;
-                        app.push_output("[acción cancelada]");
+                        app.push_output("[action cancelled]");
                     }
                     _ => {}
                 }
@@ -150,11 +157,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         (KeyCode::Char('x'), _) => {
                             if task_manager.cancel() {
-                                app.push_output("[tarea cancelada]");
+                                app.push_output("[task cancelled]");
                             }
                             None
                         }
                         (KeyCode::Char('r'), _) => Some(TaskRequest::ListContainers),
+                        (KeyCode::Char('d'), _) => Some(app.dashboard_request()),
                         (KeyCode::Char('f'), _) => {
                             app.start_container_filter();
                             None
