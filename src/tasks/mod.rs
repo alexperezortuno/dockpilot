@@ -13,6 +13,8 @@ use crate::{
 use bollard::query_parameters::EventsOptions;
 use bollard::query_parameters::LogsOptionsBuilder;
 use futures_util::StreamExt;
+use ssh2::Session;
+use std::{fs::File, io, net::TcpStream, path::Path};
 use tokio::{sync::mpsc, task::JoinHandle};
 
 pub enum TaskRequest {
@@ -44,6 +46,12 @@ pub enum TaskRequest {
         preview: bool,
     },
     Events,
+    SshUpload {
+        host: String,
+        local_archive: String,
+        remote_path: String,
+        password: String,
+    },
 }
 
 impl TaskRequest {
@@ -67,6 +75,7 @@ impl TaskRequest {
             Self::Dashboard { .. } => Mutation::ReadOnly,
             Self::DiskUsage { .. } => Mutation::ReadOnly,
             Self::Events => Mutation::ReadOnly,
+            Self::SshUpload { .. } => Mutation::Mutating,
         }
     }
 
@@ -94,6 +103,9 @@ impl TaskRequest {
             }
             .to_string(),
             Self::Events => "stream Docker events".to_string(),
+            Self::SshUpload {
+                host, remote_path, ..
+            } => format!("upload archive to {}:{}", host, remote_path),
         }
     }
 }
@@ -204,6 +216,11 @@ impl TaskManager {
                 }
                 .to_string(),
                 TaskRequest::Events => "streaming Docker events".to_string(),
+                TaskRequest::SshUpload {
+                    host, remote_path, ..
+                } => {
+                    format!("uploading archive to {}:{}", host, remote_path)
+                }
             };
             if sender
                 .send(TaskEvent::Progress {
@@ -627,6 +644,28 @@ impl TaskManager {
                             .await;
                     }
                 },
+                TaskRequest::SshUpload {
+                    host,
+                    local_archive,
+                    remote_path,
+                    password,
+                } => {
+                    let result = tokio::task::spawn_blocking(move || {
+                        upload_via_ssh(&host, &local_archive, &remote_path, &password)
+                    })
+                    .await;
+                    let lines = match result {
+                        Ok(Ok(lines)) => lines,
+                        Ok(Err(error)) => {
+                            vec![format!("[ssh] upload failed: {}", error), String::new()]
+                        }
+                        Err(error) => vec![
+                            format!("[ssh] upload task failed: {}", error),
+                            String::new(),
+                        ],
+                    };
+                    let _ = sender.send(TaskEvent::Finished { id, lines }).await;
+                }
             }
         });
 
@@ -656,6 +695,41 @@ impl TaskManager {
             false
         }
     }
+}
+
+fn upload_via_ssh(
+    host: &str,
+    local_archive: &str,
+    remote_path: &str,
+    password: &str,
+) -> Result<Vec<String>, String> {
+    let (user, hostname) = host
+        .split_once('@')
+        .ok_or_else(|| "SSH host must use user@host format".to_string())?;
+    let tcp = TcpStream::connect((hostname, 22)).map_err(|error| error.to_string())?;
+    let mut session = Session::new().map_err(|error| error.to_string())?;
+    session.set_tcp_stream(tcp);
+    session.handshake().map_err(|error| error.to_string())?;
+    session
+        .userauth_password(user, password)
+        .map_err(|error| error.to_string())?;
+    if !session.authenticated() {
+        return Err("SSH authentication failed".to_string());
+    }
+    let mut local = File::open(local_archive).map_err(|error| error.to_string())?;
+    let size = local.metadata().map_err(|error| error.to_string())?.len();
+    let mut remote = session
+        .scp_send(Path::new(remote_path), 0o600, size, None)
+        .map_err(|error| error.to_string())?;
+    io::copy(&mut local, &mut remote).map_err(|error| error.to_string())?;
+    remote.send_eof().map_err(|error| error.to_string())?;
+    remote.wait_eof().map_err(|error| error.to_string())?;
+    remote.close().map_err(|error| error.to_string())?;
+    remote.wait_close().map_err(|error| error.to_string())?;
+    Ok(vec![
+        format!("[ssh] uploaded archive to {}:{}", host, remote_path),
+        String::new(),
+    ])
 }
 
 impl Drop for TaskManager {
