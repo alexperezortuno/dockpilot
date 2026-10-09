@@ -107,7 +107,7 @@ When the container table has focus, `Enter` inspects the selected container. Lif
 ## Tabs
 
 - **Dashboard**: Docker Engine version, container health counts, and selected-container CPU/memory statistics.
-- **Container**: start/stop Compose services, list containers, logs, create/remove, inspect process state, pause/unpause, update, and wait.
+- **Container**: start/stop named containers, stop all containers, list containers, logs, create/remove, inspect process state, pause/unpause, update, and wait.
 - **Image**: build, rebuild, list, remove, push, pull, save/load, and history.
 - **Network**: list, create, and remove Docker networks.
 - **Volume**: list, create, and remove Docker volumes.
