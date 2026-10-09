@@ -17,7 +17,7 @@
 - [x] DS-012: Dashboard, health and CPU/memory statistics.
 
 ## P2
-- [ ] DS-013: Compose project management with correct working directory and profiles.
+- [x] DS-013: Compose project management with correct working directory and profiles.
 - [ ] DS-014: Image management and progress.
 - [ ] DS-015: Local/remote Docker contexts and read-only policy.
 - [ ] DS-016: Themes, shortcuts and preference persistence.
