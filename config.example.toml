@@ -1,0 +1,11 @@
+# Copy this file to config.toml and adjust values as needed.
+
+# Compose project folder and Docker working directory.
+project_folder = "."
+
+# TUI event polling interval. Valid range: 10..=5000 milliseconds.
+poll_interval_ms = 50
+
+# Policy defaults consumed by later safety-policy work.
+safe_mode = true
+read_only = false
