@@ -91,6 +91,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 TaskEvent::Dashboard { id, data } => {
                     app.set_dashboard(data);
                     task_manager.complete(id);
+                    if task_manager.has_client() {
+                        task_manager.spawn(TaskRequest::ListImages);
+                    }
+                }
+                TaskEvent::Images { id, images } => {
+                    let count = images.len();
+                    app.set_images(images);
+                    app.push_output(format!("[docker] loaded {} images", count));
+                    task_manager.complete(id);
                 }
             }
         }
@@ -160,6 +169,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         (KeyCode::Char('r'), _) => Some(TaskRequest::ListContainers),
                         (KeyCode::Char('d'), _) => Some(app.dashboard_request()),
+                        (KeyCode::Char('i'), _) => Some(TaskRequest::ListImages),
                         (KeyCode::Char('f'), _) => {
                             app.start_container_filter();
                             None
