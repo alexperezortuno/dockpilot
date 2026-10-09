@@ -20,6 +20,7 @@ Completed:
 - DS-007 safe-mode confirmations and read-only mutation blocking
 - DS-008 Bollard Docker Engine connection with disconnected-state handling
 - DS-009 Bollard container table with selection, sorting, filtering, and refresh
+- DS-010 Bollard container inspection and guarded lifecycle operations
 
 The current TUI preserves the original tabbed interface for containers, images, networks, volumes, projects, machines, and help.
 
@@ -46,7 +47,7 @@ cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-Current validation includes 13 unit tests covering application navigation, container filtering, configuration precedence, terminal restoration, safe command arguments, task cancellation, and engine status.
+Current validation includes 15 unit tests covering application navigation, container filtering and inspection, configuration precedence, terminal restoration, safe command arguments, task cancellation, lifecycle policy, and engine status.
 
 ## Configuration
 
@@ -87,6 +88,8 @@ Polling intervals must be between 10 and 5000 milliseconds, and the project fold
 | `Ctrl+C` | Quit |
 
 During a confirmation prompt, press `y` to continue or `n` / `Esc` to cancel.
+
+When the container table has focus, `Enter` inspects the selected container. Lifecycle mutations use Bollard and still pass through safe-mode confirmation and read-only policy checks.
 
 ### Input mode
 
