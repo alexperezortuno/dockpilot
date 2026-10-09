@@ -23,6 +23,7 @@ Completed:
 - DS-010 Bollard container inspection and guarded lifecycle operations
 - DS-011 bounded Bollard log streaming with follow, pause, and search
 - DS-012 dashboard health summary and selected-container CPU/memory statistics
+- DS-013 Compose project actions with explicit working directories and profiles
 
 The current TUI preserves the original tabbed interface for containers, images, networks, volumes, projects, machines, and help.
 
@@ -49,7 +50,7 @@ cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-Current validation includes 17 unit tests covering application navigation, dashboard requests, container filtering and inspection, bounded logs, configuration precedence, terminal restoration, safe command arguments, task cancellation, lifecycle policy, and engine status.
+Current validation includes 20 unit tests covering application navigation, Compose profile dispatch, dashboard requests, container filtering and inspection, bounded logs, configuration precedence, terminal restoration, safe command arguments, task cancellation, lifecycle policy, and engine status.
 
 ## Configuration
 
@@ -111,7 +112,7 @@ When the container table has focus, `Enter` inspects the selected container. Lif
 - **Image**: build, rebuild, list, remove, push, pull, save/load, and history.
 - **Network**: list, create, and remove Docker networks.
 - **Volume**: list, create, and remove Docker volumes.
-- **Project**: set the project folder.
+- **Project**: set the project folder, run Compose up/down/config, and start with a selected Compose profile.
 - **Machine**: Docker Machine operations.
 - **Help**: keyboard reference.
 
