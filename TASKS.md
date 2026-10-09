@@ -14,7 +14,7 @@
 - [x] DS-009: Container table with selection, sorting, filtering and search.
 - [x] DS-010: Inspect and guarded container lifecycle operations.
 - [x] DS-011: Follow/search/pause logs with bounded ring buffer.
-- [ ] DS-012: Dashboard, health and CPU/memory statistics.
+- [x] DS-012: Dashboard, health and CPU/memory statistics.
 
 ## P2
 - [ ] DS-013: Compose project management with correct working directory and profiles.
