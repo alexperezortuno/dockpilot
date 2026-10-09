@@ -2,8 +2,8 @@ use crate::{
     docker::{
         CommandSpec,
         client::{
-            ContainerLifecycle, ContainerRow, apply_container_lifecycle, inspect_container,
-            list_containers,
+            ContainerLifecycle, ContainerRow, DashboardData, apply_container_lifecycle,
+            dashboard_data, inspect_container, list_containers,
         },
         run_command, run_stop_all,
     },
@@ -31,6 +31,9 @@ pub enum TaskRequest {
         id: String,
         follow: bool,
     },
+    Dashboard {
+        selected_id: Option<String>,
+    },
 }
 
 impl TaskRequest {
@@ -48,21 +51,23 @@ impl TaskRequest {
                 }
             }
             Self::ContainerLogs { .. } => Mutation::ReadOnly,
+            Self::Dashboard { .. } => Mutation::ReadOnly,
         }
     }
 
     pub fn description(&self) -> String {
         match self {
             Self::Command { spec, .. } => spec.display(),
-            Self::StopAll => "detener todos los contenedores".to_string(),
-            Self::ListContainers => "listar contenedores".to_string(),
-            Self::InspectContainer { id } => format!("inspeccionar contenedor {}", id),
+            Self::StopAll => "stop all containers".to_string(),
+            Self::ListContainers => "list containers".to_string(),
+            Self::InspectContainer { id } => format!("inspect container {}", id),
             Self::ContainerLifecycle { id, operation } => {
-                format!("{} contenedor {}", operation.label(), id)
+                format!("{} container {}", operation.label(), id)
             }
             Self::ContainerLogs { id, follow } => {
                 format!("logs {}{}", id, if *follow { " (follow)" } else { "" })
             }
+            Self::Dashboard { .. } => "update dashboard".to_string(),
         }
     }
 }
@@ -85,6 +90,10 @@ pub enum TaskEvent {
     },
     LogLine {
         line: String,
+    },
+    Dashboard {
+        id: u64,
+        data: DashboardData,
     },
 }
 
@@ -131,16 +140,17 @@ impl TaskManager {
             }
 
             let progress = match &request {
-                TaskRequest::Command { spec, .. } => format!("ejecutando: {}", spec.display()),
-                TaskRequest::StopAll => "deteniendo contenedores activos".to_string(),
-                TaskRequest::ListContainers => "consultando contenedores".to_string(),
-                TaskRequest::InspectContainer { id } => format!("inspeccionando {}", id),
+                TaskRequest::Command { spec, .. } => format!("executing: {}", spec.display()),
+                TaskRequest::StopAll => "stopping active containers".to_string(),
+                TaskRequest::ListContainers => "querying containers".to_string(),
+                TaskRequest::InspectContainer { id } => format!("inspecting {}", id),
                 TaskRequest::ContainerLifecycle { id, operation } => {
-                    format!("{} contenedor {}", operation.label(), id)
+                    format!("{} container {}", operation.label(), id)
                 }
                 TaskRequest::ContainerLogs { id, follow } => {
                     format!("logs {}{}", id, if *follow { " (follow)" } else { "" })
                 }
+                TaskRequest::Dashboard { .. } => "updating dashboard".to_string(),
             };
             if sender
                 .send(TaskEvent::Progress {
@@ -176,7 +186,7 @@ impl TaskManager {
                                 .send(TaskEvent::Finished {
                                     id,
                                     lines: vec![
-                                        format!("[docker] error listando contenedores: {}", error),
+                                        format!("[docker] error listing containers: {}", error),
                                         String::new(),
                                     ],
                                 })
@@ -315,6 +325,36 @@ impl TaskManager {
                                 id,
                                 lines: vec![
                                     "[docker] Engine disconnected; cannot stream logs".to_string(),
+                                    String::new(),
+                                ],
+                            })
+                            .await;
+                    }
+                },
+                TaskRequest::Dashboard { selected_id } => match client {
+                    Some(client) => match dashboard_data(&client, selected_id.as_deref()).await {
+                        Ok(data) => {
+                            let _ = sender.send(TaskEvent::Dashboard { id, data }).await;
+                        }
+                        Err(error) => {
+                            let _ = sender
+                                .send(TaskEvent::Finished {
+                                    id,
+                                    lines: vec![
+                                        format!("[docker] dashboard failed: {}", error),
+                                        String::new(),
+                                    ],
+                                })
+                                .await;
+                        }
+                    },
+                    None => {
+                        let _ = sender
+                            .send(TaskEvent::Finished {
+                                id,
+                                lines: vec![
+                                    "[docker] Engine disconnected; dashboard unavailable"
+                                        .to_string(),
                                     String::new(),
                                 ],
                             })
