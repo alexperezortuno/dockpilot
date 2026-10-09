@@ -3,7 +3,7 @@ use crate::{
         CommandSpec,
         client::{
             ContainerLifecycle, ContainerRow, DashboardData, apply_container_lifecycle,
-            dashboard_data, inspect_container, list_containers,
+            dashboard_data, inspect_container, list_containers, start_all_containers,
         },
         run_command, run_stop_all,
     },
@@ -19,6 +19,7 @@ pub enum TaskRequest {
         mutation: Mutation,
     },
     StopAll,
+    StartAll,
     ListContainers,
     InspectContainer {
         id: String,
@@ -41,6 +42,7 @@ impl TaskRequest {
         match self {
             Self::Command { mutation, .. } => *mutation,
             Self::StopAll => Mutation::Destructive,
+            Self::StartAll => Mutation::Mutating,
             Self::ListContainers => Mutation::ReadOnly,
             Self::InspectContainer { .. } => Mutation::ReadOnly,
             Self::ContainerLifecycle { operation, .. } => {
@@ -59,6 +61,7 @@ impl TaskRequest {
         match self {
             Self::Command { spec, .. } => spec.display(),
             Self::StopAll => "stop all containers".to_string(),
+            Self::StartAll => "start all containers".to_string(),
             Self::ListContainers => "list containers".to_string(),
             Self::InspectContainer { id } => format!("inspect container {}", id),
             Self::ContainerLifecycle { id, operation } => {
@@ -142,6 +145,7 @@ impl TaskManager {
             let progress = match &request {
                 TaskRequest::Command { spec, .. } => format!("executing: {}", spec.display()),
                 TaskRequest::StopAll => "stopping active containers".to_string(),
+                TaskRequest::StartAll => "starting stopped containers".to_string(),
                 TaskRequest::ListContainers => "querying containers".to_string(),
                 TaskRequest::InspectContainer { id } => format!("inspecting {}", id),
                 TaskRequest::ContainerLifecycle { id, operation } => {
@@ -176,6 +180,36 @@ impl TaskManager {
                         .collect();
                     let _ = sender.send(TaskEvent::Finished { id, lines }).await;
                 }
+                TaskRequest::StartAll => match client {
+                    Some(client) => match start_all_containers(&client).await {
+                        Ok(lines) => {
+                            let _ = sender.send(TaskEvent::Finished { id, lines }).await;
+                        }
+                        Err(error) => {
+                            let _ = sender
+                                .send(TaskEvent::Finished {
+                                    id,
+                                    lines: vec![
+                                        format!("[docker] start all failed: {}", error),
+                                        String::new(),
+                                    ],
+                                })
+                                .await;
+                        }
+                    },
+                    None => {
+                        let _ = sender
+                            .send(TaskEvent::Finished {
+                                id,
+                                lines: vec![
+                                    "[docker] Engine disconnected; cannot start containers"
+                                        .to_string(),
+                                    String::new(),
+                                ],
+                            })
+                            .await;
+                    }
+                },
                 TaskRequest::ListContainers => match client {
                     Some(client) => match list_containers(&client).await {
                         Ok(containers) => {
