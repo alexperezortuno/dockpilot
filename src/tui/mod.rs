@@ -1,8 +1,7 @@
 pub mod terminal;
 
 use crate::app::{
-    App, ContainerAction, ImageAction, MachineAction, NetworkAction, ProjectAction, Tab,
-    VolumeAction,
+    App, ContainerAction, ImageAction, NetworkAction, ProjectAction, Tab, VolumeAction,
 };
 use crate::config::ThemeName;
 use ratatui::{
@@ -71,7 +70,6 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
         "Network",
         "Volume",
         "Project",
-        "Machine",
         "Help",
     ];
 
@@ -82,8 +80,7 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
         Tab::Network => 3,
         Tab::Volume => 4,
         Tab::Project => 5,
-        Tab::Machine => 6,
-        Tab::Help => 7,
+        Tab::Help => 6,
     };
 
     let tabs = Tabs::new(tab_titles)
@@ -114,6 +111,18 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
         if let Some(area) = input_area {
             draw_input(f, app, area);
         }
+        return;
+    }
+
+    if matches!(app.current_tab, Tab::Network) {
+        draw_network_tab(f, app, chunks[1]);
+        draw_output(f, app, chunks[2]);
+        return;
+    }
+
+    if matches!(app.current_tab, Tab::Volume) {
+        draw_volume_tab(f, app, chunks[1]);
+        draw_output(f, app, chunks[2]);
         return;
     }
 
@@ -225,24 +234,6 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
                 .collect();
             (items, "Project Actions", &mut app.project_list_state)
         }
-        Tab::Machine => {
-            let items = app
-                .machine_actions
-                .iter()
-                .map(|a| {
-                    let s = match a {
-                        MachineAction::List => "List Machines",
-                        MachineAction::Start => "Start Machine",
-                        MachineAction::Stop => "Stop Machine",
-                        MachineAction::Env => "Show Machine Env",
-                        MachineAction::Eval => "Eval Machine Env",
-                        MachineAction::Ip => "Get Machine IP",
-                    };
-                    ListItem::new(s)
-                })
-                .collect();
-            (items, "Machine Actions", &mut app.machine_list_state)
-        }
         Tab::Help => {
             let help = vec![
                 "Dockpilot TUI",
@@ -267,7 +258,7 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
                 "  y / n    - Confirm or cancel pending action",
                 "",
                 "Available tabs:",
-                "  Container, Image, Network, Volume, Project, Machine",
+                "  Dashboard, Container, Image, Network, Volume, Project",
             ];
             let items: Vec<ListItem> = help.iter().map(|l| ListItem::new(*l)).collect();
             let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Help"));
@@ -397,6 +388,76 @@ fn draw_image_tab(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
     f.render_stateful_widget(list, panes[1], &mut app.image_list_state);
 }
 
+fn draw_network_tab(f: &mut Frame, app: &mut App, area: Rect) {
+    let panes = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(72), Constraint::Percentage(28)])
+        .split(area);
+    let rows = app.networks.iter().map(|network| {
+        Row::new([
+            network.id.clone(),
+            network.name.clone(),
+            network.driver.clone(),
+            network.scope.clone(),
+        ])
+    });
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(12),
+            Constraint::Min(20),
+            Constraint::Length(12),
+            Constraint::Length(12),
+        ],
+    )
+    .header(Row::new(["ID", "Name", "Driver", "Scope"]))
+    .block(Block::default().borders(Borders::ALL).title("Networks"));
+    f.render_stateful_widget(table, panes[0], &mut app.network_table_state);
+    let items = app.network_actions.iter().map(|action| {
+        ListItem::new(match action {
+            NetworkAction::List => "Refresh Networks",
+            NetworkAction::Create => "Create Network",
+            NetworkAction::Remove => "Remove Network",
+        })
+    });
+    let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Actions"));
+    f.render_stateful_widget(list, panes[1], &mut app.network_list_state);
+}
+
+fn draw_volume_tab(f: &mut Frame, app: &mut App, area: Rect) {
+    let panes = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(72), Constraint::Percentage(28)])
+        .split(area);
+    let rows = app.volumes.iter().map(|volume| {
+        Row::new([
+            volume.name.clone(),
+            volume.driver.clone(),
+            volume.mountpoint.clone(),
+        ])
+    });
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Min(24),
+            Constraint::Length(16),
+            Constraint::Min(36),
+        ],
+    )
+    .header(Row::new(["Name", "Driver", "Mountpoint"]))
+    .block(Block::default().borders(Borders::ALL).title("Volumes"));
+    f.render_stateful_widget(table, panes[0], &mut app.volume_table_state);
+    let items = app.volume_actions.iter().map(|action| {
+        ListItem::new(match action {
+            VolumeAction::List => "Refresh Volumes",
+            VolumeAction::Create => "Create Volume",
+            VolumeAction::Remove => "Remove Volume",
+        })
+    });
+    let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Actions"));
+    f.render_stateful_widget(list, panes[1], &mut app.volume_list_state);
+}
+
 fn draw_container_tab(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
     let panes = Layout::default()
         .direction(Direction::Horizontal)
@@ -485,7 +546,7 @@ fn draw_output(f: &mut Frame, app: &mut App, area: Rect) {
     let lines = if showing_logs {
         app.filtered_log_lines()
     } else {
-        app.output_lines.clone()
+        app.output_lines.iter().cloned().collect()
     };
     let total = lines.len();
     let start = total.saturating_sub(visible_height);
