@@ -60,6 +60,20 @@ cargo clippy --all-targets --all-features -- -D warnings
 
 Current validation includes 31 unit tests covering application navigation, JSON query dispatch, guarded volume backup dispatch, disk usage policy, bounded output/events/alerts, network/volume listing dispatch, theme and shortcut configuration, context endpoint parsing, image listing dispatch, Compose profile dispatch, dashboard requests, container filtering and inspection, bounded logs, configuration precedence, terminal restoration, safe command arguments, task cancellation, lifecycle policy, and engine status.
 
+## CI and Integration
+
+GitHub CI runs formatting, unit tests, Clippy, and a release build on pushes and pull requests. Docker integration tests are intentionally opt-in because they require a reachable Docker Engine:
+
+```bash
+cargo test --test docker_integration -- --ignored
+```
+
+The manual `Docker integration` workflow runs the same ignored test in GitHub Actions.
+
+## Releases
+
+Pushing a tag matching `v*` runs the release workflow and publishes archives for Linux x86_64, macOS Apple Silicon, and Windows x86_64. Each archive contains the `dockpilot` binary, `README.md`, and `config.example.toml`.
+
 ## JSON CLI
 
 Use `--json` with one read-only query. The command exits without starting the TUI:
@@ -147,8 +161,6 @@ When the container table has focus, `Enter` inspects the selected container. Lif
 - **Dashboard**: Docker Engine version, container health counts, and selected-container CPU/memory statistics.
 - **Container**: start/stop named containers, stop all containers, list containers, logs, create/remove, inspect process state, pause/unpause, update, and wait.
 - **Image**: list images through Bollard, build, rebuild, remove, push, pull, save/load, and history with task progress.
-- **Network**: list, create, and remove Docker networks.
-- **Volume**: list, create, and remove Docker volumes.
 - **Project**: set the project folder, run Compose up/down/config, and start with a selected Compose profile.
 - **Network**: list networks through Bollard, create, and remove networks.
 - **Volume**: list volumes through Bollard, create/remove, and guarded backup/restore volumes using `volume|archive-path` input.
