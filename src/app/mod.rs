@@ -140,6 +140,7 @@ pub struct App {
     pub(crate) image_actions: Vec<ImageAction>,
     pub(crate) images: Vec<ImageRow>,
     pub(crate) image_table_state: ratatui::widgets::TableState,
+    pub(crate) image_table_focus: bool,
     pub(crate) network_actions: Vec<NetworkAction>,
     pub(crate) volume_actions: Vec<VolumeAction>,
     pub(crate) project_actions: Vec<ProjectAction>,
@@ -212,6 +213,7 @@ impl App {
             ],
             images: Vec::new(),
             image_table_state: ratatui::widgets::TableState::default(),
+            image_table_focus: false,
             network_actions: vec![
                 NetworkAction::List,
                 NetworkAction::Create,
@@ -299,6 +301,14 @@ impl App {
         } else {
             Some(0)
         });
+    }
+
+    pub fn toggle_focus(&mut self) {
+        match self.current_tab {
+            Tab::Container => self.toggle_container_focus(),
+            Tab::Image => self.image_table_focus = !self.image_table_focus,
+            _ => {}
+        }
     }
 
     pub fn toggle_container_focus(&mut self) {
@@ -458,7 +468,13 @@ impl App {
                     );
                 }
             }
-            Tab::Image => Self::next_in_list(&mut self.image_list_state, self.image_actions.len()),
+            Tab::Image => {
+                if self.image_table_focus {
+                    Self::next_in_table(&mut self.image_table_state, self.images.len());
+                } else {
+                    Self::next_in_list(&mut self.image_list_state, self.image_actions.len());
+                }
+            }
             Tab::Network => {
                 Self::next_in_list(&mut self.network_list_state, self.network_actions.len())
             }
@@ -490,7 +506,11 @@ impl App {
                 }
             }
             Tab::Image => {
-                Self::previous_in_list(&mut self.image_list_state, self.image_actions.len())
+                if self.image_table_focus {
+                    Self::previous_in_table(&mut self.image_table_state, self.images.len());
+                } else {
+                    Self::previous_in_list(&mut self.image_list_state, self.image_actions.len());
+                }
             }
             Tab::Network => {
                 Self::previous_in_list(&mut self.network_list_state, self.network_actions.len())
@@ -946,6 +966,17 @@ impl App {
                 None
             }
             Tab::Image => {
+                if self.image_table_focus {
+                    if let Some(index) = self.image_table_state.selected()
+                        && let Some(image) = self.images.get(index)
+                    {
+                        self.push_output(format!(
+                            "[image] {} | {} | {} bytes",
+                            image.id, image.tag, image.size
+                        ));
+                    }
+                    return None;
+                }
                 if let Some(i) = self.image_list_state.selected()
                     && let Some(action) = self.image_actions.get(i).cloned()
                 {
@@ -1166,5 +1197,26 @@ mod tests {
         let request = app.execute_selected().expect("image list request");
 
         assert!(matches!(request, TaskRequest::ListImages));
+    }
+
+    #[test]
+    fn image_tab_toggles_between_table_and_action_focus() {
+        let mut app = App::new();
+        app.current_tab = Tab::Image;
+        app.set_images(vec![ImageRow {
+            id: "abc123".to_string(),
+            tag: "demo:latest".to_string(),
+            size: 1024,
+        }]);
+
+        app.toggle_focus();
+        app.execute_selected();
+
+        assert!(app.image_table_focus);
+        assert!(
+            app.output_lines
+                .last()
+                .is_some_and(|line| line.contains("demo:latest"))
+        );
     }
 }
