@@ -22,6 +22,7 @@ Completed:
 - DS-009 Bollard container table with selection, sorting, filtering, and refresh
 - DS-010 Bollard container inspection and guarded lifecycle operations
 - DS-011 bounded Bollard log streaming with follow, pause, and search
+- DS-012 dashboard health summary and selected-container CPU/memory statistics
 
 The current TUI preserves the original tabbed interface for containers, images, networks, volumes, projects, machines, and help.
 
@@ -48,7 +49,7 @@ cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-Current validation includes 16 unit tests covering application navigation, container filtering and inspection, bounded logs, configuration precedence, terminal restoration, safe command arguments, task cancellation, lifecycle policy, and engine status.
+Current validation includes 17 unit tests covering application navigation, dashboard requests, container filtering and inspection, bounded logs, configuration precedence, terminal restoration, safe command arguments, task cancellation, lifecycle policy, and engine status.
 
 ## Configuration
 
@@ -87,6 +88,7 @@ Polling intervals must be between 10 and 5000 milliseconds, and the project fold
 | `s` | Cycle container sort field |
 | `p` | Pause/resume log display |
 | `/` | Filter log lines |
+| `d` | Refresh dashboard data |
 | `q` / `Esc` | Quit |
 | `Ctrl+C` | Quit |
 
@@ -104,6 +106,7 @@ When the container table has focus, `Enter` inspects the selected container. Lif
 
 ## Tabs
 
+- **Dashboard**: Docker Engine version, container health counts, and selected-container CPU/memory statistics.
 - **Container**: start/stop Compose services, list containers, logs, create/remove, inspect process state, pause/unpause, update, and wait.
 - **Image**: build, rebuild, list, remove, push, pull, save/load, and history.
 - **Network**: list, create, and remove Docker networks.
