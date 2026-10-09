@@ -160,11 +160,13 @@ When the container table has focus, `Enter` inspects the selected container. Lif
 
 - **Dashboard**: Docker Engine version, container health counts, and selected-container CPU/memory statistics.
 - **Container**: start/stop named containers, stop all containers, list containers, logs, create/remove, inspect process state, pause/unpause, update, and wait.
-- **Image**: list images through Bollard, build, rebuild, remove, push, pull, save/load, load through an SSH Docker context, and history with task progress.
+- **Image**: list images through Bollard, build, rebuild, remove, push, pull, save/load, and upload tar archives to SSH servers with task progress.
 - **Project**: set the project folder, run Compose up/down/config, and start with a selected Compose profile.
 - **Network**: list networks through Bollard, create, and remove networks.
 - **Volume**: list volumes through Bollard, create/remove, and guarded backup/restore volumes using `volume|archive-path` input.
 - **Help**: keyboard reference.
+
+SSH tar uploads prompt for the password in a masked input field. The password is used only for the active upload and is not persisted, logged, or passed as a process argument.
 
 ## Architecture
 
