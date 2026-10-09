@@ -171,7 +171,7 @@ pub struct App {
     pub(crate) network_list_state: ListState,
     pub(crate) volume_list_state: ListState,
     pub(crate) project_list_state: ListState,
-    pub(crate) output_scroll: u16,
+    pub(crate) output_scroll: usize,
     pub(crate) project_folder: String,
     pub(crate) engine_status: String,
     pub(crate) theme: ThemeName,
@@ -306,7 +306,7 @@ impl App {
 
     pub fn push_output(&mut self, line: impl Into<String>) {
         output::push(&mut self.output_lines, self.output_capacity, line);
-        self.output_scroll = self.output_lines.len() as u16;
+        self.output_scroll = self.output_lines.len();
     }
 
     pub fn append_output(&mut self, lines: impl IntoIterator<Item = String>) {
@@ -318,7 +318,28 @@ impl App {
     pub fn set_output_capacity(&mut self, capacity: usize) {
         self.output_capacity = capacity.max(1);
         output::resize(&mut self.output_lines, self.output_capacity);
-        self.output_scroll = self.output_lines.len() as u16;
+        self.output_scroll = self.output_lines.len();
+    }
+
+    pub fn clear_output(&mut self) {
+        self.output_lines.clear();
+        self.output_scroll = 0;
+    }
+
+    pub fn scroll_output_up(&mut self, amount: usize) {
+        self.output_scroll = self.output_scroll.saturating_sub(amount);
+    }
+
+    pub fn scroll_output_down(&mut self, amount: usize) {
+        self.output_scroll = self.output_scroll.saturating_add(amount);
+    }
+
+    pub fn scroll_output_home(&mut self) {
+        self.output_scroll = 0;
+    }
+
+    pub fn scroll_output_end(&mut self) {
+        self.output_scroll = self.output_lines.len();
     }
 
     pub fn set_containers(&mut self, containers: Vec<ContainerRow>) {
@@ -1387,6 +1408,20 @@ mod tests {
         assert_eq!(app.output_lines.len(), 2);
         assert_eq!(app.output_lines.front().map(String::as_str), Some("second"));
         assert_eq!(app.output_lines.back().map(String::as_str), Some("third"));
+    }
+
+    #[test]
+    fn general_output_can_be_cleared_and_scrolled() {
+        let mut app = App::new();
+        app.push_output("first");
+        app.push_output("second");
+        app.scroll_output_home();
+        assert_eq!(app.output_scroll, 0);
+        app.scroll_output_down(1);
+        assert_eq!(app.output_scroll, 1);
+        app.clear_output();
+        assert!(app.output_lines.is_empty());
+        assert_eq!(app.output_scroll, 0);
     }
 
     #[test]
