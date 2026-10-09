@@ -1,4 +1,4 @@
-use bollard::Docker;
+use bollard::{Docker, query_parameters::ListContainersOptionsBuilder};
 use std::fmt;
 use tokio::time::{Duration, timeout};
 
@@ -26,6 +26,43 @@ impl fmt::Display for EngineStatus {
 pub struct EngineConnection {
     client: Option<Docker>,
     status: EngineStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContainerRow {
+    pub id: String,
+    pub name: String,
+    pub image: String,
+    pub state: String,
+    pub status: String,
+}
+
+pub async fn list_containers(client: &Docker) -> Result<Vec<ContainerRow>, String> {
+    let options = ListContainersOptionsBuilder::new().all(true).build();
+    let containers = client
+        .list_containers(Some(options))
+        .await
+        .map_err(|error| error.to_string())?;
+
+    Ok(containers
+        .into_iter()
+        .map(|container| ContainerRow {
+            id: container.id.unwrap_or_else(|| "-".to_string()),
+            name: container
+                .names
+                .unwrap_or_default()
+                .into_iter()
+                .next()
+                .map(|name| name.trim_start_matches('/').to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            image: container.image.unwrap_or_else(|| "-".to_string()),
+            state: container
+                .state
+                .map(|state| format!("{state:?}"))
+                .unwrap_or_else(|| "unknown".to_string()),
+            status: container.status.unwrap_or_else(|| "-".to_string()),
+        })
+        .collect())
 }
 
 impl EngineConnection {
