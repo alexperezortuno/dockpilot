@@ -20,7 +20,7 @@
 - [x] DS-013: Compose project management with correct working directory and profiles.
 - [x] DS-014: Image management and progress.
 - [x] DS-015: Local/remote Docker contexts and read-only policy.
-- [ ] DS-016: Themes, shortcuts and preference persistence.
+- [x] DS-016: Themes, shortcuts and preference persistence.
 
 ## P3
 - [ ] DS-017: Networks and volumes.
