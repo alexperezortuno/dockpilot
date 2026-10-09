@@ -323,7 +323,14 @@ fn draw_image_tab(f: &mut Frame, app: &mut App, area: Rect) {
         ],
     )
     .header(Row::new(["ID", "Tag", "Size"]))
-    .block(Block::default().borders(Borders::ALL).title("Images"))
+    .block(Block::default().borders(Borders::ALL).title(format!(
+        " Images | focus: {} ",
+        if app.image_table_focus {
+            "table"
+        } else {
+            "actions"
+        }
+    )))
     .row_highlight_style(
         Style::default()
             .bg(Color::Blue)
