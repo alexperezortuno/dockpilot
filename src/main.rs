@@ -8,6 +8,7 @@ mod tui;
 use app::App;
 use clap::Parser;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use docker::client::EngineConnection;
 use ratatui::{Terminal, backend::CrosstermBackend};
 use security::SafetyPolicy;
 use std::{io, time::Duration};
@@ -50,6 +51,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::with_project_folder(config.project_folder);
+    let engine_connection = EngineConnection::connect().await;
+    let engine_status = engine_connection.status_message();
+    let engine_status_display = engine_connection.status().to_string();
+    let _engine_client = engine_connection.into_client();
+    app.set_engine_status(engine_status);
+    app.push_output(format!("[docker] {}", engine_status_display));
     let mut task_manager = TaskManager::new(32);
     let poll_interval = Duration::from_millis(config.poll_interval_ms);
     let mut pending_confirmation: Option<TaskRequest> = None;
