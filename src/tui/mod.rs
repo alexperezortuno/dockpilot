@@ -204,6 +204,8 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
                 "  f               - Filter containers",
                 "  m               - Toggle table/actions focus",
                 "  s               - Cycle container sort",
+                "  p               - Pause/resume log display",
+                "  /               - Filter log lines",
                 "  q / Esc         - Exit",
                 "",
                 "Input mode:",
@@ -327,21 +329,32 @@ fn draw_container_tab(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn draw_output(f: &mut Frame, app: &mut App, area: Rect) {
     let visible_height = area.height.saturating_sub(2) as usize;
-    let total = app.output_lines.len();
+    let showing_logs = !app.log_lines.is_empty();
+    let lines = if showing_logs {
+        app.filtered_log_lines()
+    } else {
+        app.output_lines.clone()
+    };
+    let total = lines.len();
     let start = total.saturating_sub(visible_height);
 
-    let items: Vec<ListItem> = app
-        .output_lines
+    let items: Vec<ListItem> = lines
         .iter()
         .skip(start)
         .map(|l| ListItem::new(l.clone()))
         .collect();
 
-    let output_list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(format!(" Output ({} líneas) ", total)),
-    );
+    let output_list = List::new(items).block(Block::default().borders(Borders::ALL).title(
+        if showing_logs {
+            format!(
+                " Logs ({} líneas{}) ",
+                total,
+                if app.logs_paused { ", paused" } else { "" }
+            )
+        } else {
+            format!(" Output ({} líneas) ", total)
+        },
+    ));
 
     f.render_widget(output_list, area);
 }
