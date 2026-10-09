@@ -683,7 +683,13 @@ impl App {
         if value.is_empty()
             && !matches!(
                 action.as_ref(),
-                Some(PendingAction::ContainerFilter | PendingAction::LogFilter)
+                Some(
+                    PendingAction::ContainerFilter
+                        | PendingAction::ImageFilter
+                        | PendingAction::NetworkFilter
+                        | PendingAction::VolumeFilter
+                        | PendingAction::LogFilter,
+                )
             )
         {
             self.push_output("[entrada cancelada: valor vacío]");
@@ -1484,5 +1490,33 @@ mod tests {
         app.toggle_focus();
         app.execute_selected();
         assert!(app.volume_table_focus);
+    }
+
+    #[test]
+    fn all_resource_tables_support_filters() {
+        let mut app = App::new();
+        app.set_images(vec![ImageRow {
+            id: "abc".to_string(),
+            tag: "web:latest".to_string(),
+            size: 1,
+        }]);
+        app.set_networks(vec![NetworkRow {
+            id: "net".to_string(),
+            name: "frontend".to_string(),
+            driver: "bridge".to_string(),
+            scope: "local".to_string(),
+        }]);
+        app.set_volumes(vec![VolumeRow {
+            name: "database".to_string(),
+            driver: "local".to_string(),
+            mountpoint: "/data".to_string(),
+        }]);
+        app.image_filter = "web".to_string();
+        app.network_filter = "front".to_string();
+        app.volume_filter = "data".to_string();
+
+        assert_eq!(app.filtered_images().len(), 1);
+        assert_eq!(app.filtered_networks().len(), 1);
+        assert_eq!(app.filtered_volumes().len(), 1);
     }
 }
