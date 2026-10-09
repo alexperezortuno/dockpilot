@@ -7,7 +7,9 @@ use crate::{
     tasks::TaskRequest,
 };
 use ratatui::widgets::ListState;
-use std::path::PathBuf;
+use std::{collections::VecDeque, path::PathBuf};
+
+const MAX_LOG_LINES: usize = 2_000;
 
 #[derive(Debug, Clone)]
 pub enum ContainerAction {
@@ -103,6 +105,7 @@ pub enum PendingAction {
     ContainerCreate,
     ContainerFilter,
     ContainerRestart,
+    LogFilter,
     // Image
     ImageRemove,
     ImagePush,
@@ -140,6 +143,9 @@ pub struct App {
     pub(crate) output_scroll: u16,
     pub(crate) project_folder: String,
     pub(crate) engine_status: String,
+    pub(crate) log_lines: VecDeque<String>,
+    pub(crate) log_filter: String,
+    pub(crate) logs_paused: bool,
     pub(crate) containers: Vec<ContainerRow>,
     pub(crate) container_table_state: ratatui::widgets::TableState,
     pub(crate) container_table_focus: bool,
@@ -220,6 +226,9 @@ impl App {
             output_scroll: 0,
             project_folder,
             engine_status: "checking Docker Engine".to_string(),
+            log_lines: VecDeque::new(),
+            log_filter: String::new(),
+            logs_paused: false,
             containers: Vec::new(),
             container_table_state: ratatui::widgets::TableState::default(),
             container_table_focus: true,
@@ -307,6 +316,33 @@ impl App {
 
     pub fn set_engine_status(&mut self, status: impl Into<String>) {
         self.engine_status = status.into();
+    }
+
+    pub fn push_log_line(&mut self, line: String) {
+        if self.logs_paused {
+            return;
+        }
+        if self.log_lines.len() == MAX_LOG_LINES {
+            self.log_lines.pop_front();
+        }
+        self.log_lines.push_back(line);
+    }
+
+    pub fn toggle_logs_paused(&mut self) {
+        self.logs_paused = !self.logs_paused;
+    }
+
+    pub fn start_log_filter(&mut self) {
+        self.start_input("Filtro de logs:", PendingAction::LogFilter);
+    }
+
+    pub fn filtered_log_lines(&self) -> Vec<String> {
+        let filter = self.log_filter.to_lowercase();
+        self.log_lines
+            .iter()
+            .filter(|line| filter.is_empty() || line.to_lowercase().contains(&filter))
+            .cloned()
+            .collect()
     }
 
     // --- Generic navigation ---
@@ -489,11 +525,10 @@ impl App {
     ) -> Option<TaskRequest> {
         match action {
             // Container
-            PendingAction::ContainerLogs => self.execute_command(
-                CommandSpec::new("docker")
-                    .args(["logs", "--tail", "100"])
-                    .arg(value),
-            ),
+            PendingAction::ContainerLogs => Some(TaskRequest::ContainerLogs {
+                id: value.to_string(),
+                follow: true,
+            }),
             PendingAction::ContainerTop => self.execute_command(
                 CommandSpec::new("docker")
                     .args(["container", "top"])
@@ -543,6 +578,10 @@ impl App {
             PendingAction::ContainerFilter => {
                 self.container_filter = value.to_string();
                 self.container_table_state.select(Some(0));
+                None
+            }
+            PendingAction::LogFilter => {
+                self.log_filter = value.to_string();
                 None
             }
             // Image
@@ -951,5 +990,18 @@ mod tests {
             request,
             TaskRequest::InspectContainer { id } if id == "container-id"
         ));
+    }
+
+    #[test]
+    fn log_buffer_is_bounded_and_filterable() {
+        let mut app = App::new();
+        for index in 0..=MAX_LOG_LINES {
+            app.push_log_line(format!("line {}", index));
+        }
+        app.log_filter = "line 2000".to_string();
+
+        assert_eq!(app.log_lines.len(), MAX_LOG_LINES);
+        assert_eq!(app.log_lines.front().map(String::as_str), Some("line 1"));
+        assert_eq!(app.filtered_log_lines(), vec!["line 2000"]);
     }
 }
