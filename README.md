@@ -21,10 +21,11 @@ Completed:
 - DS-008 Bollard Docker Engine connection with disconnected-state handling
 - DS-009 Bollard container table with selection, sorting, filtering, and refresh
 - DS-010 Bollard container inspection and guarded lifecycle operations
+- DS-011 bounded Bollard log streaming with follow, pause, and search
 
 The current TUI preserves the original tabbed interface for containers, images, networks, volumes, projects, machines, and help.
 
-> Important: Output buffering is not bounded yet. Safety policy is configured at startup; safe mode confirms mutations, destructive actions always require confirmation, and read-only mode blocks mutations.
+> Important: The dedicated log buffer is bounded to 2,000 lines; general command output is not bounded yet. Safety policy is configured at startup; safe mode confirms mutations, destructive actions always require confirmation, and read-only mode blocks mutations.
 
 ## Requirements
 
@@ -47,7 +48,7 @@ cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-Current validation includes 15 unit tests covering application navigation, container filtering and inspection, configuration precedence, terminal restoration, safe command arguments, task cancellation, lifecycle policy, and engine status.
+Current validation includes 16 unit tests covering application navigation, container filtering and inspection, bounded logs, configuration precedence, terminal restoration, safe command arguments, task cancellation, lifecycle policy, and engine status.
 
 ## Configuration
 
@@ -84,6 +85,8 @@ Polling intervals must be between 10 and 5000 milliseconds, and the project fold
 | `f` | Filter/search containers |
 | `m` | Toggle container table/actions focus |
 | `s` | Cycle container sort field |
+| `p` | Pause/resume log display |
+| `/` | Filter log lines |
 | `q` / `Esc` | Quit |
 | `Ctrl+C` | Quit |
 
