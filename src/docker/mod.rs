@@ -1,3 +1,5 @@
+pub mod client;
+
 use std::{ffi::OsString, fs::File, io, path::PathBuf, process::Stdio};
 use tokio::process::Command;
 
