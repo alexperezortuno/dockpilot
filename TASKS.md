@@ -1,8 +1,8 @@
-# Docker Simplifier v2 — Implementation Tasks
+# Dockpilot v2 — Implementation Tasks
 
 ## P0
-- [ ] DS-001: Baseline current repository, dependencies, build/test status and known defects. Deliver report; no refactor.
-- [ ] DS-002: Extract app state, Docker operations and TUI rendering into modules while preserving behavior.
+- [x] DS-001: Baseline current repository, dependencies, build/test status and known defects. Deliver report; no refactor.
+- [x] DS-002: Extract app state, Docker operations and TUI rendering into modules while preserving behavior.
 - [ ] DS-003: Introduce RAII terminal guard and failure recovery tests.
 - [ ] DS-004: Replace `sh -c` with typed, explicit argument execution; test metacharacters and paths with spaces.
 - [ ] DS-005: Introduce Tokio tasks, bounded channels, progress and cancellation; prove navigation stays responsive.
