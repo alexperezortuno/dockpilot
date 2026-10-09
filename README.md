@@ -25,6 +25,7 @@ Completed:
 - DS-012 dashboard health summary and selected-container CPU/memory statistics
 - DS-013 Compose project actions with explicit working directories and profiles
 - DS-014 Bollard image listing with task progress for image operations
+- DS-015 named local/remote Docker contexts with read-only enforcement
 
 The current TUI preserves the original tabbed interface for containers, images, networks, volumes, projects, machines, and help.
 
@@ -51,7 +52,7 @@ cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-Current validation includes 21 unit tests covering application navigation, image listing dispatch, Compose profile dispatch, dashboard requests, container filtering and inspection, bounded logs, configuration precedence, terminal restoration, safe command arguments, task cancellation, lifecycle policy, and engine status.
+Current validation includes 22 unit tests covering application navigation, context endpoint parsing, image listing dispatch, Compose profile dispatch, dashboard requests, container filtering and inspection, bounded logs, configuration precedence, terminal restoration, safe command arguments, task cancellation, lifecycle policy, and engine status.
 
 ## Configuration
 
@@ -70,8 +71,10 @@ Supported environment variables and CLI flags:
 | Poll interval | `DOCKPILOT_POLL_INTERVAL_MS` | `--poll-interval-ms MILLISECONDS` |
 | Safe mode | `DOCKPILOT_SAFE_MODE` | `--safe-mode BOOL` |
 | Read-only mode | `DOCKPILOT_READ_ONLY` | `--read-only BOOL` |
+| Docker context | `DOCKPILOT_DOCKER_CONTEXT` | `--docker-context NAME` |
 
 Polling intervals must be between 10 and 5000 milliseconds, and the project folder must exist.
+Named Docker contexts are resolved through explicit `docker context inspect` arguments and support local, TCP, and SSH endpoints. Read-only mode applies equally to the selected local or remote context.
 
 ## Controls
 
