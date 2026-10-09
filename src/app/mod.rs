@@ -1,7 +1,7 @@
 use crate::{
     docker::{
         CommandSpec,
-        client::{ContainerLifecycle, ContainerRow},
+        client::{ContainerLifecycle, ContainerRow, DashboardData},
     },
     security::Mutation,
     tasks::TaskRequest,
@@ -74,6 +74,7 @@ pub enum MachineAction {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Tab {
+    Dashboard,
     Container,
     Image,
     Network,
@@ -143,6 +144,7 @@ pub struct App {
     pub(crate) output_scroll: u16,
     pub(crate) project_folder: String,
     pub(crate) engine_status: String,
+    pub(crate) dashboard: Option<DashboardData>,
     pub(crate) log_lines: VecDeque<String>,
     pub(crate) log_filter: String,
     pub(crate) logs_paused: bool,
@@ -226,6 +228,7 @@ impl App {
             output_scroll: 0,
             project_folder,
             engine_status: "checking Docker Engine".to_string(),
+            dashboard: None,
             log_lines: VecDeque::new(),
             log_filter: String::new(),
             logs_paused: false,
@@ -318,6 +321,23 @@ impl App {
         self.engine_status = status.into();
     }
 
+    pub fn set_dashboard(&mut self, dashboard: DashboardData) {
+        self.dashboard = Some(dashboard);
+    }
+
+    pub fn selected_container_id(&self) -> Option<String> {
+        let index = self.container_table_state.selected()?;
+        self.filtered_containers()
+            .get(index)
+            .map(|container| container.id.clone())
+    }
+
+    pub fn dashboard_request(&self) -> TaskRequest {
+        TaskRequest::Dashboard {
+            selected_id: self.selected_container_id(),
+        }
+    }
+
     pub fn push_log_line(&mut self, line: String) {
         if self.logs_paused {
             return;
@@ -398,6 +418,7 @@ impl App {
 
     pub fn next(&mut self) {
         match self.current_tab {
+            Tab::Dashboard => {}
             Tab::Container => {
                 if self.container_table_focus {
                     let len = self.filtered_containers().len();
@@ -428,6 +449,7 @@ impl App {
 
     pub fn previous(&mut self) {
         match self.current_tab {
+            Tab::Dashboard => {}
             Tab::Container => {
                 if self.container_table_focus {
                     let len = self.filtered_containers().len();
@@ -460,19 +482,21 @@ impl App {
 
     pub fn next_tab(&mut self) {
         self.current_tab = match self.current_tab {
+            Tab::Dashboard => Tab::Container,
             Tab::Container => Tab::Image,
             Tab::Image => Tab::Network,
             Tab::Network => Tab::Volume,
             Tab::Volume => Tab::Project,
             Tab::Project => Tab::Machine,
             Tab::Machine => Tab::Help,
-            Tab::Help => Tab::Container,
+            Tab::Help => Tab::Dashboard,
         };
     }
 
     pub fn previous_tab(&mut self) {
         self.current_tab = match self.current_tab {
-            Tab::Container => Tab::Help,
+            Tab::Dashboard => Tab::Help,
+            Tab::Container => Tab::Dashboard,
             Tab::Image => Tab::Container,
             Tab::Network => Tab::Image,
             Tab::Volume => Tab::Network,
@@ -837,6 +861,7 @@ impl App {
 
     pub fn execute_selected(&mut self) -> Option<TaskRequest> {
         match self.current_tab {
+            Tab::Dashboard => None,
             Tab::Container => {
                 if self.container_table_focus {
                     let containers = self.filtered_containers();
@@ -1003,5 +1028,17 @@ mod tests {
         assert_eq!(app.log_lines.len(), MAX_LOG_LINES);
         assert_eq!(app.log_lines.front().map(String::as_str), Some("line 1"));
         assert_eq!(app.filtered_log_lines(), vec!["line 2000"]);
+    }
+
+    #[test]
+    fn dashboard_request_is_read_only() {
+        let app = App::new();
+        let request = app.dashboard_request();
+
+        assert_eq!(request.mutation(), Mutation::ReadOnly);
+        assert!(matches!(
+            request,
+            TaskRequest::Dashboard { selected_id: None }
+        ));
     }
 }
