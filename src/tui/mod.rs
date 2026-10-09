@@ -1,3 +1,5 @@
+pub mod terminal;
+
 use crate::app::{
     App, ContainerAction, ImageAction, MachineAction, NetworkAction, ProjectAction, Tab,
     VolumeAction,
@@ -54,11 +56,7 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
     };
 
     let tabs = Tabs::new(tab_titles)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Dockpilot "),
-        )
+        .block(Block::default().borders(Borders::ALL).title(" Dockpilot "))
         .select(selected_tab)
         .style(Style::default().fg(Color::White))
         .highlight_style(
