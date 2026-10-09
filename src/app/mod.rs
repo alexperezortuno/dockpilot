@@ -13,6 +13,7 @@ const MAX_LOG_LINES: usize = 2_000;
 
 #[derive(Debug, Clone)]
 pub enum ContainerAction {
+    StartAll,
     Start,
     StopAll,
     Stop,
@@ -96,6 +97,8 @@ pub enum ContainerSort {
 pub enum PendingAction {
     // Container
     ContainerLogs,
+    ContainerStart,
+    ContainerStop,
     ContainerTop,
     ContainerDiff,
     ContainerPause,
@@ -172,6 +175,7 @@ impl App {
         let mut app = App {
             current_tab: Tab::Container,
             container_actions: vec![
+                ContainerAction::StartAll,
                 ContainerAction::Start,
                 ContainerAction::StopAll,
                 ContainerAction::Stop,
@@ -243,7 +247,7 @@ impl App {
             pending_action: None,
         };
 
-        app.container_list_state.select(Some(0));
+        app.container_list_state.select(Some(1));
         app.image_list_state.select(Some(0));
         app.network_list_state.select(Some(0));
         app.volume_list_state.select(Some(0));
@@ -549,6 +553,12 @@ impl App {
     ) -> Option<TaskRequest> {
         match action {
             // Container
+            PendingAction::ContainerStart => {
+                self.execute_container_lifecycle(value, ContainerLifecycle::Start)
+            }
+            PendingAction::ContainerStop => {
+                self.execute_container_lifecycle(value, ContainerLifecycle::Stop)
+            }
             PendingAction::ContainerLogs => Some(TaskRequest::ContainerLogs {
                 id: value.to_string(),
                 follow: true,
@@ -717,6 +727,7 @@ impl App {
         })
     }
 
+    #[allow(dead_code)]
     fn execute_compose(&mut self, args: &[&str]) -> Option<TaskRequest> {
         let project_folder = self.project_folder.clone();
         self.execute_mutating_command(
@@ -729,9 +740,14 @@ impl App {
     // --- Tab actions ---
     fn run_container_action(&mut self, action: &ContainerAction) -> Option<TaskRequest> {
         match action {
-            ContainerAction::Start => self.execute_compose(&["compose", "up", "-d"]),
+            ContainerAction::StartAll => Some(TaskRequest::StartAll),
+            ContainerAction::Start => {
+                self.start_input("Contenedor a iniciar:", PendingAction::ContainerStart)
+            }
             ContainerAction::StopAll => Some(TaskRequest::StopAll),
-            ContainerAction::Stop => self.execute_compose(&["compose", "stop"]),
+            ContainerAction::Stop => {
+                self.start_input("Contenedor a detener:", PendingAction::ContainerStop)
+            }
             ContainerAction::Restart => {
                 self.start_input("Contenedor a reiniciar:", PendingAction::ContainerRestart)
             }
@@ -1039,6 +1055,44 @@ mod tests {
         assert!(matches!(
             request,
             TaskRequest::Dashboard { selected_id: None }
+        ));
+    }
+
+    #[test]
+    fn start_action_creates_named_container_request() {
+        let mut app = App::new();
+        app.container_table_focus = false;
+        app.container_list_state.select(Some(1));
+        app.execute_selected();
+        app.input_buffer = "web".to_string();
+
+        let request = app.confirm_input().expect("start request");
+
+        assert!(matches!(
+            request,
+            TaskRequest::ContainerLifecycle {
+                id,
+                operation: ContainerLifecycle::Start
+            } if id == "web"
+        ));
+    }
+
+    #[test]
+    fn stop_action_creates_named_container_request() {
+        let mut app = App::new();
+        app.container_table_focus = false;
+        app.container_list_state.select(Some(3));
+        app.execute_selected();
+        app.input_buffer = "web".to_string();
+
+        let request = app.confirm_input().expect("stop request");
+
+        assert!(matches!(
+            request,
+            TaskRequest::ContainerLifecycle {
+                id,
+                operation: ContainerLifecycle::Stop
+            } if id == "web"
         ));
     }
 }
