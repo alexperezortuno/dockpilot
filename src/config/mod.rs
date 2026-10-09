@@ -1,10 +1,40 @@
-use clap::Parser;
-use serde::Deserialize;
+use clap::{Parser, ValueEnum};
+use serde::{Deserialize, Serialize};
 use std::{env, fmt, path::PathBuf, str::FromStr};
 
 const DEFAULT_CONFIG_FILE: &str = "config.toml";
 const MIN_POLL_INTERVAL_MS: u64 = 10;
 const MAX_POLL_INTERVAL_MS: u64 = 5_000;
+const PREFERENCES_FILE: &str = "dockpilot.preferences.toml";
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq, Serialize, ValueEnum)]
+#[serde(rename_all = "lowercase")]
+#[value(rename_all = "lower")]
+pub enum ThemeName {
+    #[default]
+    Dark,
+    Light,
+    Mono,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Shortcuts {
+    pub cancel_task: char,
+    pub toggle_focus: char,
+    pub refresh: char,
+    pub theme: char,
+}
+
+impl Default for Shortcuts {
+    fn default() -> Self {
+        Self {
+            cancel_task: 'x',
+            toggle_focus: 'm',
+            refresh: 'r',
+            theme: 't',
+        }
+    }
+}
 
 #[derive(Debug, Parser, Default)]
 #[command(name = "dockify", about = "Docker management TUI")]
@@ -28,6 +58,13 @@ pub struct Cli {
     /// Block mutating actions.
     #[arg(long, value_name = "BOOL")]
     pub read_only: Option<bool>,
+
+    /// Docker context name.
+    #[arg(long, value_name = "NAME")]
+    pub docker_context: Option<String>,
+    /// Interface theme.
+    #[arg(long, value_name = "NAME")]
+    pub theme: Option<ThemeName>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -36,14 +73,28 @@ pub struct Config {
     pub poll_interval_ms: u64,
     pub safe_mode: bool,
     pub read_only: bool,
+    pub docker_context: Option<String>,
+    pub theme: ThemeName,
+    pub shortcuts: Shortcuts,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Serialize)]
 struct PartialConfig {
     project_folder: Option<PathBuf>,
     poll_interval_ms: Option<u64>,
     safe_mode: Option<bool>,
     read_only: Option<bool>,
+    docker_context: Option<String>,
+    theme: Option<ThemeName>,
+    shortcuts: Option<PartialShortcuts>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Serialize)]
+struct PartialShortcuts {
+    cancel_task: Option<String>,
+    toggle_focus: Option<String>,
+    refresh: Option<String>,
+    theme: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,6 +121,9 @@ impl Default for Config {
             poll_interval_ms: 50,
             safe_mode: true,
             read_only: false,
+            docker_context: None,
+            theme: ThemeName::default(),
+            shortcuts: Shortcuts::default(),
         }
     }
 }
@@ -80,15 +134,40 @@ impl Config {
             Some(path) => read_file_config(&path)?,
             None => PartialConfig::default(),
         };
+        let preferences = match PathBuf::from(PREFERENCES_FILE).is_file() {
+            true => read_file_config(&PathBuf::from(PREFERENCES_FILE))?,
+            false => PartialConfig::default(),
+        };
         let environment = environment_config()?;
         let command_line = PartialConfig {
             project_folder: cli.project_folder.clone(),
             poll_interval_ms: cli.poll_interval_ms,
             safe_mode: cli.safe_mode,
             read_only: cli.read_only,
+            docker_context: cli.docker_context.clone(),
+            theme: cli.theme,
+            shortcuts: None,
         };
 
-        resolve_layers(Self::default(), file, environment, command_line)
+        resolve_layers(
+            Self::default(),
+            file,
+            preferences,
+            environment,
+            command_line,
+        )
+    }
+
+    pub fn save_preferences(&self) -> Result<(), ConfigError> {
+        let preferences = PartialConfig {
+            theme: Some(self.theme),
+            ..PartialConfig::default()
+        };
+        let contents = toml::to_string(&preferences)
+            .map_err(|error| ConfigError::new(format!("cannot encode preferences: {}", error)))?;
+        std::fs::write(PREFERENCES_FILE, contents).map_err(|error| {
+            ConfigError::new(format!("cannot save {}: {}", PREFERENCES_FILE, error))
+        })
     }
 
     fn validate(&self) -> Result<(), ConfigError> {
@@ -126,6 +205,9 @@ fn environment_config() -> Result<PartialConfig, ConfigError> {
         poll_interval_ms: parse_env("DOCKPILOT_POLL_INTERVAL_MS")?,
         safe_mode: parse_env("DOCKPILOT_SAFE_MODE")?,
         read_only: parse_env("DOCKPILOT_READ_ONLY")?,
+        docker_context: env::var("DOCKPILOT_DOCKER_CONTEXT").ok(),
+        theme: None,
+        shortcuts: None,
     })
 }
 
@@ -147,10 +229,11 @@ where
 fn resolve_layers(
     mut config: Config,
     file: PartialConfig,
+    preferences: PartialConfig,
     environment: PartialConfig,
     command_line: PartialConfig,
 ) -> Result<Config, ConfigError> {
-    for layer in [file, environment, command_line] {
+    for layer in [file, preferences, environment, command_line] {
         if let Some(value) = layer.project_folder {
             config.project_folder = value;
         }
@@ -163,14 +246,55 @@ fn resolve_layers(
         if let Some(value) = layer.read_only {
             config.read_only = value;
         }
+        if let Some(value) = layer.docker_context {
+            config.docker_context = Some(value);
+        }
+        if let Some(value) = layer.theme {
+            config.theme = value;
+        }
+        if let Some(shortcuts) = layer.shortcuts {
+            apply_shortcuts(&mut config.shortcuts, shortcuts)?;
+        }
     }
     config.validate()?;
     Ok(config)
 }
 
+fn apply_shortcuts(
+    shortcuts: &mut Shortcuts,
+    partial: PartialShortcuts,
+) -> Result<(), ConfigError> {
+    if let Some(value) = partial.cancel_task {
+        shortcuts.cancel_task = parse_shortcut("cancel_task", &value)?;
+    }
+    if let Some(value) = partial.toggle_focus {
+        shortcuts.toggle_focus = parse_shortcut("toggle_focus", &value)?;
+    }
+    if let Some(value) = partial.refresh {
+        shortcuts.refresh = parse_shortcut("refresh", &value)?;
+    }
+    if let Some(value) = partial.theme {
+        shortcuts.theme = parse_shortcut("theme", &value)?;
+    }
+    Ok(())
+}
+
+fn parse_shortcut(name: &str, value: &str) -> Result<char, ConfigError> {
+    let mut chars = value.chars();
+    match (chars.next(), chars.next()) {
+        (Some(value), None) => Ok(value),
+        _ => Err(ConfigError::new(format!(
+            "shortcut {} must contain exactly one character",
+            name
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Config, ConfigError, PartialConfig, resolve_layers};
+    use super::{
+        Config, ConfigError, PartialConfig, PartialShortcuts, Shortcuts, ThemeName, resolve_layers,
+    };
     use std::path::PathBuf;
 
     #[test]
@@ -180,27 +304,46 @@ mod tests {
             poll_interval_ms: 50,
             safe_mode: true,
             read_only: false,
+            docker_context: None,
+            theme: ThemeName::Dark,
+            shortcuts: Shortcuts::default(),
         };
         let file = PartialConfig {
             project_folder: Some(PathBuf::from(".")),
             poll_interval_ms: Some(100),
             safe_mode: Some(false),
             read_only: Some(false),
+            docker_context: None,
+            theme: None,
+            shortcuts: None,
         };
         let environment = PartialConfig {
             project_folder: None,
             poll_interval_ms: Some(200),
             safe_mode: Some(true),
             read_only: Some(true),
+            docker_context: None,
+            theme: None,
+            shortcuts: None,
         };
         let command_line = PartialConfig {
             project_folder: Some(PathBuf::from(".")),
             poll_interval_ms: Some(500),
             safe_mode: None,
             read_only: Some(false),
+            docker_context: None,
+            theme: None,
+            shortcuts: None,
         };
 
-        let config = resolve_layers(defaults, file, environment, command_line).unwrap();
+        let config = resolve_layers(
+            defaults,
+            file,
+            PartialConfig::default(),
+            environment,
+            command_line,
+        )
+        .unwrap();
 
         assert_eq!(config.poll_interval_ms, 500);
         assert!(config.safe_mode);
@@ -217,6 +360,7 @@ mod tests {
             },
             PartialConfig::default(),
             PartialConfig::default(),
+            PartialConfig::default(),
         );
 
         assert_eq!(
@@ -225,5 +369,27 @@ mod tests {
                 "poll_interval_ms must be between 10 and 5000"
             ))
         );
+    }
+
+    #[test]
+    fn theme_and_shortcuts_are_loaded_from_layers() {
+        let config = resolve_layers(
+            Config::default(),
+            PartialConfig {
+                theme: Some(ThemeName::Light),
+                shortcuts: Some(PartialShortcuts {
+                    theme: Some("z".to_string()),
+                    ..PartialShortcuts::default()
+                }),
+                ..PartialConfig::default()
+            },
+            PartialConfig::default(),
+            PartialConfig::default(),
+            PartialConfig::default(),
+        )
+        .unwrap();
+
+        assert_eq!(config.theme, ThemeName::Light);
+        assert_eq!(config.shortcuts.theme, 'z');
     }
 }

@@ -1,7 +1,8 @@
 use crate::{
+    config::ThemeName,
     docker::{
         CommandSpec,
-        client::{ContainerLifecycle, ContainerRow, DashboardData},
+        client::{ContainerLifecycle, ContainerRow, DashboardData, ImageRow},
     },
     security::Mutation,
     tasks::TaskRequest,
@@ -138,6 +139,9 @@ pub struct App {
     pub(crate) current_tab: Tab,
     pub(crate) container_actions: Vec<ContainerAction>,
     pub(crate) image_actions: Vec<ImageAction>,
+    pub(crate) images: Vec<ImageRow>,
+    pub(crate) image_table_state: ratatui::widgets::TableState,
+    pub(crate) image_table_focus: bool,
     pub(crate) network_actions: Vec<NetworkAction>,
     pub(crate) volume_actions: Vec<VolumeAction>,
     pub(crate) project_actions: Vec<ProjectAction>,
@@ -152,6 +156,7 @@ pub struct App {
     pub(crate) output_scroll: u16,
     pub(crate) project_folder: String,
     pub(crate) engine_status: String,
+    pub(crate) theme: ThemeName,
     pub(crate) dashboard: Option<DashboardData>,
     pub(crate) log_lines: VecDeque<String>,
     pub(crate) log_filter: String,
@@ -208,6 +213,9 @@ impl App {
                 ImageAction::Load,
                 ImageAction::History,
             ],
+            images: Vec::new(),
+            image_table_state: ratatui::widgets::TableState::default(),
+            image_table_focus: false,
             network_actions: vec![
                 NetworkAction::List,
                 NetworkAction::Create,
@@ -243,6 +251,7 @@ impl App {
             output_scroll: 0,
             project_folder,
             engine_status: "checking Docker Engine".to_string(),
+            theme: ThemeName::Dark,
             dashboard: None,
             log_lines: VecDeque::new(),
             log_filter: String::new(),
@@ -286,6 +295,23 @@ impl App {
             } else {
                 Some(0)
             });
+    }
+
+    pub fn set_images(&mut self, images: Vec<ImageRow>) {
+        self.images = images;
+        self.image_table_state.select(if self.images.is_empty() {
+            None
+        } else {
+            Some(0)
+        });
+    }
+
+    pub fn toggle_focus(&mut self) {
+        match self.current_tab {
+            Tab::Container => self.toggle_container_focus(),
+            Tab::Image => self.image_table_focus = !self.image_table_focus,
+            _ => {}
+        }
     }
 
     pub fn toggle_container_focus(&mut self) {
@@ -334,6 +360,19 @@ impl App {
 
     pub fn set_engine_status(&mut self, status: impl Into<String>) {
         self.engine_status = status.into();
+    }
+
+    pub fn set_theme(&mut self, theme: ThemeName) {
+        self.theme = theme;
+    }
+
+    pub fn cycle_theme(&mut self) -> ThemeName {
+        self.theme = match self.theme {
+            ThemeName::Dark => ThemeName::Light,
+            ThemeName::Light => ThemeName::Mono,
+            ThemeName::Mono => ThemeName::Dark,
+        };
+        self.theme
     }
 
     pub fn set_dashboard(&mut self, dashboard: DashboardData) {
@@ -445,7 +484,13 @@ impl App {
                     );
                 }
             }
-            Tab::Image => Self::next_in_list(&mut self.image_list_state, self.image_actions.len()),
+            Tab::Image => {
+                if self.image_table_focus {
+                    Self::next_in_table(&mut self.image_table_state, self.images.len());
+                } else {
+                    Self::next_in_list(&mut self.image_list_state, self.image_actions.len());
+                }
+            }
             Tab::Network => {
                 Self::next_in_list(&mut self.network_list_state, self.network_actions.len())
             }
@@ -477,7 +522,11 @@ impl App {
                 }
             }
             Tab::Image => {
-                Self::previous_in_list(&mut self.image_list_state, self.image_actions.len())
+                if self.image_table_focus {
+                    Self::previous_in_table(&mut self.image_table_state, self.images.len());
+                } else {
+                    Self::previous_in_list(&mut self.image_list_state, self.image_actions.len());
+                }
             }
             Tab::Network => {
                 Self::previous_in_list(&mut self.network_list_state, self.network_actions.len())
@@ -827,9 +876,7 @@ impl App {
                 "Tag y contexto (ej: myimage .):",
                 PendingAction::ImageRebuild,
             ),
-            ImageAction::List => {
-                self.execute_command(CommandSpec::new("docker").args(["image", "list"]))
-            }
+            ImageAction::List => Some(TaskRequest::ListImages),
             ImageAction::Remove => self.start_input(
                 "Imagen a eliminar (ID o nombre):",
                 PendingAction::ImageRemove,
@@ -935,6 +982,17 @@ impl App {
                 None
             }
             Tab::Image => {
+                if self.image_table_focus {
+                    if let Some(index) = self.image_table_state.selected()
+                        && let Some(image) = self.images.get(index)
+                    {
+                        self.push_output(format!(
+                            "[image] {} | {} | {} bytes",
+                            image.id, image.tag, image.size
+                        ));
+                    }
+                    return None;
+                }
                 if let Some(i) = self.image_list_state.selected()
                     && let Some(action) = self.image_actions.get(i).cloned()
                 {
@@ -1144,5 +1202,37 @@ mod tests {
         let request = app.confirm_input().expect("compose profile request");
 
         assert_eq!(request.mutation(), Mutation::Mutating);
+    }
+
+    #[test]
+    fn image_list_action_requests_bollard_image_listing() {
+        let mut app = App::new();
+        app.current_tab = Tab::Image;
+        app.image_list_state.select(Some(2));
+
+        let request = app.execute_selected().expect("image list request");
+
+        assert!(matches!(request, TaskRequest::ListImages));
+    }
+
+    #[test]
+    fn image_tab_toggles_between_table_and_action_focus() {
+        let mut app = App::new();
+        app.current_tab = Tab::Image;
+        app.set_images(vec![ImageRow {
+            id: "abc123".to_string(),
+            tag: "demo:latest".to_string(),
+            size: 1024,
+        }]);
+
+        app.toggle_focus();
+        app.execute_selected();
+
+        assert!(app.image_table_focus);
+        assert!(
+            app.output_lines
+                .last()
+                .is_some_and(|line| line.contains("demo:latest"))
+        );
     }
 }

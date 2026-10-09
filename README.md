@@ -24,6 +24,9 @@ Completed:
 - DS-011 bounded Bollard log streaming with follow, pause, and search
 - DS-012 dashboard health summary and selected-container CPU/memory statistics
 - DS-013 Compose project actions with explicit working directories and profiles
+- DS-014 Bollard image listing with task progress for image operations
+- DS-015 named local/remote Docker contexts with read-only enforcement
+- DS-016 configurable themes, shortcuts, and persisted theme preference
 
 The current TUI preserves the original tabbed interface for containers, images, networks, volumes, projects, machines, and help.
 
@@ -50,7 +53,7 @@ cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-Current validation includes 20 unit tests covering application navigation, Compose profile dispatch, dashboard requests, container filtering and inspection, bounded logs, configuration precedence, terminal restoration, safe command arguments, task cancellation, lifecycle policy, and engine status.
+Current validation includes 24 unit tests covering application navigation, theme and shortcut configuration, context endpoint parsing, image listing dispatch, Compose profile dispatch, dashboard requests, container filtering and inspection, bounded logs, configuration precedence, terminal restoration, safe command arguments, task cancellation, lifecycle policy, and engine status.
 
 ## Configuration
 
@@ -69,8 +72,12 @@ Supported environment variables and CLI flags:
 | Poll interval | `DOCKPILOT_POLL_INTERVAL_MS` | `--poll-interval-ms MILLISECONDS` |
 | Safe mode | `DOCKPILOT_SAFE_MODE` | `--safe-mode BOOL` |
 | Read-only mode | `DOCKPILOT_READ_ONLY` | `--read-only BOOL` |
+| Docker context | `DOCKPILOT_DOCKER_CONTEXT` | `--docker-context NAME` |
+| Theme | `config.toml` | `--theme dark|light|mono` |
 
 Polling intervals must be between 10 and 5000 milliseconds, and the project folder must exist.
+Named Docker contexts are resolved through explicit `docker context inspect` arguments and support local, TCP, and SSH endpoints. Read-only mode applies equally to the selected local or remote context.
+Theme changes are cycled with the configured theme shortcut and saved to `dockpilot.preferences.toml` on exit.
 
 ## Controls
 
@@ -90,6 +97,8 @@ Polling intervals must be between 10 and 5000 milliseconds, and the project fold
 | `p` | Pause/resume log display |
 | `/` | Filter log lines |
 | `d` | Refresh dashboard data |
+| `i` | Refresh image listing |
+| `t` | Cycle theme |
 | `q` / `Esc` | Quit |
 | `Ctrl+C` | Quit |
 
@@ -109,7 +118,7 @@ When the container table has focus, `Enter` inspects the selected container. Lif
 
 - **Dashboard**: Docker Engine version, container health counts, and selected-container CPU/memory statistics.
 - **Container**: start/stop named containers, stop all containers, list containers, logs, create/remove, inspect process state, pause/unpause, update, and wait.
-- **Image**: build, rebuild, list, remove, push, pull, save/load, and history.
+- **Image**: list images through Bollard, build, rebuild, remove, push, pull, save/load, and history with task progress.
 - **Network**: list, create, and remove Docker networks.
 - **Volume**: list, create, and remove Docker volumes.
 - **Project**: set the project folder, run Compose up/down/config, and start with a selected Compose profile.

@@ -43,12 +43,15 @@ fn dispatch_request(
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = config::Config::load(&config::Cli::parse())?;
     let policy = SafetyPolicy::new(config.safe_mode, config.read_only);
+    let initial_theme = config.theme;
+    let shortcuts = config.shortcuts;
     let _terminal_guard = TerminalGuard::new()?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::with_project_folder(config.project_folder);
-    let engine_connection = EngineConnection::connect().await;
+    let mut app = App::with_project_folder(config.project_folder.clone());
+    app.set_theme(config.theme);
+    let engine_connection = EngineConnection::connect(config.docker_context.as_deref()).await;
     let engine_status = engine_connection.status_message();
     let engine_status_display = engine_connection.status().to_string();
     let engine_client = engine_connection.into_client();
@@ -90,6 +93,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 TaskEvent::Dashboard { id, data } => {
                     app.set_dashboard(data);
+                    task_manager.complete(id);
+                    if task_manager.has_client() {
+                        task_manager.spawn(TaskRequest::ListImages);
+                    }
+                }
+                TaskEvent::Images { id, images } => {
+                    let count = images.len();
+                    app.set_images(images);
+                    app.push_output(format!("[docker] loaded {} images", count));
                     task_manager.complete(id);
                 }
             }
@@ -152,20 +164,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             should_quit = true;
                             None
                         }
-                        (KeyCode::Char('x'), _) => {
+                        (KeyCode::Char(key), _) if key == shortcuts.cancel_task => {
                             if task_manager.cancel() {
                                 app.push_output("[task cancelled]");
                             }
                             None
                         }
-                        (KeyCode::Char('r'), _) => Some(TaskRequest::ListContainers),
+                        (KeyCode::Char(key), _) if key == shortcuts.refresh => {
+                            Some(TaskRequest::ListContainers)
+                        }
                         (KeyCode::Char('d'), _) => Some(app.dashboard_request()),
+                        (KeyCode::Char('i'), _) => Some(TaskRequest::ListImages),
                         (KeyCode::Char('f'), _) => {
                             app.start_container_filter();
                             None
                         }
-                        (KeyCode::Char('m'), _) => {
-                            app.toggle_container_focus();
+                        (KeyCode::Char(key), _) if key == shortcuts.toggle_focus => {
+                            app.toggle_focus();
                             None
                         }
                         (KeyCode::Char('s'), _) => {
@@ -178,6 +193,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         (KeyCode::Char('/'), _) => {
                             app.start_log_filter();
+                            None
+                        }
+                        (KeyCode::Char(key), _) if key == shortcuts.theme => {
+                            app.cycle_theme();
                             None
                         }
                         (KeyCode::Tab, _) => {
@@ -216,5 +235,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     task_manager.cancel();
+    if app.theme != initial_theme {
+        let mut preferences = config;
+        preferences.theme = app.theme;
+        preferences.save_preferences()?;
+    }
     Ok(())
 }

@@ -4,6 +4,7 @@ use crate::app::{
     App, ContainerAction, ImageAction, MachineAction, NetworkAction, ProjectAction, Tab,
     VolumeAction,
 };
+use crate::config::ThemeName;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -11,8 +12,36 @@ use ratatui::{
     widgets::{Block, Borders, Cell, List, ListItem, ListState, Paragraph, Row, Table, Tabs},
 };
 
+#[derive(Clone, Copy)]
+struct Palette {
+    foreground: Color,
+    accent: Color,
+    selection: Color,
+}
+
+fn palette(theme: ThemeName) -> Palette {
+    match theme {
+        ThemeName::Dark => Palette {
+            foreground: Color::White,
+            accent: Color::Yellow,
+            selection: Color::Blue,
+        },
+        ThemeName::Light => Palette {
+            foreground: Color::Black,
+            accent: Color::Green,
+            selection: Color::LightBlue,
+        },
+        ThemeName::Mono => Palette {
+            foreground: Color::Gray,
+            accent: Color::White,
+            selection: Color::DarkGray,
+        },
+    }
+}
+
 pub fn draw_app(f: &mut Frame, app: &mut App) {
     let size = f.area();
+    let colors = palette(app.theme);
 
     // If we are in input mode, we reserve 3 lines at the bottom for the prompt.
     let (main_area, input_area) = if app.input_mode {
@@ -64,10 +93,10 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
                 .title(format!(" Dockpilot | Docker: {} ", app.engine_status)),
         )
         .select(selected_tab)
-        .style(Style::default().fg(Color::White))
+        .style(Style::default().fg(colors.foreground))
         .highlight_style(
             Style::default()
-                .fg(Color::Yellow)
+                .fg(colors.accent)
                 .add_modifier(Modifier::BOLD),
         );
 
@@ -79,8 +108,17 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
         return;
     }
 
+    if matches!(app.current_tab, Tab::Image) {
+        draw_image_tab(f, app, chunks[1], colors);
+        draw_output(f, app, chunks[2]);
+        if let Some(area) = input_area {
+            draw_input(f, app, area);
+        }
+        return;
+    }
+
     if matches!(app.current_tab, Tab::Container) {
-        draw_container_tab(f, app, chunks[1]);
+        draw_container_tab(f, app, chunks[1], colors);
         draw_output(f, app, chunks[2]);
         if let Some(area) = input_area {
             draw_input(f, app, area);
@@ -246,7 +284,7 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
         .block(Block::default().borders(Borders::ALL).title(title))
         .highlight_style(
             Style::default()
-                .bg(Color::Blue)
+                .bg(colors.selection)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol(">> ");
@@ -293,7 +331,73 @@ fn draw_dashboard(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(widget, area);
 }
 
-fn draw_container_tab(f: &mut Frame, app: &mut App, area: Rect) {
+fn draw_image_tab(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
+    let panes = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(72), Constraint::Percentage(28)])
+        .split(area);
+    let rows = app.images.iter().map(|image| {
+        Row::new([
+            Cell::from(image.id.clone()),
+            Cell::from(image.tag.clone()),
+            Cell::from(format!("{} MB", image.size / 1_048_576)),
+        ])
+    });
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(14),
+            Constraint::Min(24),
+            Constraint::Length(12),
+        ],
+    )
+    .header(Row::new(["ID", "Tag", "Size"]))
+    .block(Block::default().borders(Borders::ALL).title(format!(
+        " Images | focus: {} ",
+        if app.image_table_focus {
+            "table"
+        } else {
+            "actions"
+        }
+    )))
+    .row_highlight_style(
+        Style::default()
+            .bg(colors.selection)
+            .add_modifier(Modifier::BOLD),
+    )
+    .highlight_symbol(">> ");
+    f.render_stateful_widget(table, panes[0], &mut app.image_table_state);
+
+    let items = app.image_actions.iter().map(|action| {
+        let label = match action {
+            ImageAction::Build => "Build Image",
+            ImageAction::Rebuild => "Rebuild Image (no-cache)",
+            ImageAction::List => "Refresh Images",
+            ImageAction::Remove => "Remove Image",
+            ImageAction::Push => "Push Image",
+            ImageAction::Pull => "Pull Image",
+            ImageAction::Save => "Save Image to tar",
+            ImageAction::Load => "Load Image from tar",
+            ImageAction::History => "View Image History",
+        };
+        ListItem::new(label)
+    });
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Image Actions"),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(colors.selection)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol(">> ");
+    f.render_stateful_widget(list, panes[1], &mut app.image_list_state);
+}
+
+fn draw_container_tab(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
     let panes = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(72), Constraint::Percentage(28)])
@@ -335,7 +439,7 @@ fn draw_container_tab(f: &mut Frame, app: &mut App, area: Rect) {
     )))
     .row_highlight_style(
         Style::default()
-            .bg(Color::Blue)
+            .bg(colors.selection)
             .add_modifier(Modifier::BOLD),
     )
     .highlight_symbol(">> ");
@@ -366,7 +470,7 @@ fn draw_container_tab(f: &mut Frame, app: &mut App, area: Rect) {
         .block(Block::default().borders(Borders::ALL).title("Actions"))
         .highlight_style(
             Style::default()
-                .bg(Color::Blue)
+                .bg(colors.selection)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol(">> ");
