@@ -199,6 +199,58 @@ pub async fn list_volumes(client: &Docker) -> Result<Vec<VolumeRow>, String> {
         .collect())
 }
 
+pub async fn disk_usage_lines(client: &Docker, preview: bool) -> Result<Vec<String>, String> {
+    let usage = client
+        .df(None::<bollard::query_parameters::DataUsageOptions>)
+        .await
+        .map_err(|error| error.to_string())?;
+    let images = usage.images.unwrap_or_default();
+    let containers = usage.containers.unwrap_or_default();
+    let volumes = usage.volumes.unwrap_or_default();
+    let reclaimable_images = images
+        .iter()
+        .filter(|image| image.repo_tags.is_empty())
+        .count();
+    let stopped_containers = containers
+        .iter()
+        .filter(|container| {
+            container
+                .state
+                .as_ref()
+                .is_none_or(|state| state.to_string() != "running")
+        })
+        .count();
+    let heading = if preview {
+        "Cleanup preview"
+    } else {
+        "Disk usage"
+    };
+
+    Ok(vec![
+        format!("[docker] {}", heading),
+        format!(
+            "[docker] image layers: {} bytes",
+            usage.layers_size.unwrap_or(0)
+        ),
+        format!(
+            "[docker] images: {} total, {} untagged candidates",
+            images.len(),
+            reclaimable_images
+        ),
+        format!(
+            "[docker] containers: {} total, {} stopped candidates",
+            containers.len(),
+            stopped_containers
+        ),
+        format!(
+            "[docker] volumes: {} total, unused status requires resource inspection",
+            volumes.len()
+        ),
+        "[docker] no cleanup mutation was executed".to_string(),
+        String::new(),
+    ])
+}
+
 pub async fn inspect_container(client: &Docker, id: &str) -> Result<Vec<String>, String> {
     let container = client
         .inspect_container(
