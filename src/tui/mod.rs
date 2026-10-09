@@ -36,6 +36,7 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
 
     // Tabs
     let tab_titles = [
+        "Dashboard",
         "Container",
         "Image",
         "Network",
@@ -46,13 +47,14 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
     ];
 
     let selected_tab = match app.current_tab {
-        Tab::Container => 0,
-        Tab::Image => 1,
-        Tab::Network => 2,
-        Tab::Volume => 3,
-        Tab::Project => 4,
-        Tab::Machine => 5,
-        Tab::Help => 6,
+        Tab::Dashboard => 0,
+        Tab::Container => 1,
+        Tab::Image => 2,
+        Tab::Network => 3,
+        Tab::Volume => 4,
+        Tab::Project => 5,
+        Tab::Machine => 6,
+        Tab::Help => 7,
     };
 
     let tabs = Tabs::new(tab_titles)
@@ -71,6 +73,12 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
 
     f.render_widget(tabs, chunks[0]);
 
+    if matches!(app.current_tab, Tab::Dashboard) {
+        draw_dashboard(f, app, chunks[1]);
+        draw_output(f, app, chunks[2]);
+        return;
+    }
+
     if matches!(app.current_tab, Tab::Container) {
         draw_container_tab(f, app, chunks[1]);
         draw_output(f, app, chunks[2]);
@@ -82,6 +90,7 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
 
     // List of actions
     let (items, title, state): (Vec<ListItem>, &str, &mut ListState) = match app.current_tab {
+        Tab::Dashboard => (Vec::new(), "Dashboard", &mut app.container_list_state),
         Tab::Container => {
             let items = app
                 .container_actions
@@ -246,6 +255,39 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
     }
 }
 
+fn draw_dashboard(f: &mut Frame, app: &App, area: Rect) {
+    let text = match &app.dashboard {
+        Some(data) => {
+            let selected = match &data.selected_stats {
+                Some(stats) => format!(
+                    "Selected {}: CPU {:.2}% | memory {}/{} MB",
+                    stats.id,
+                    stats.cpu_percent,
+                    stats.memory_usage / 1_048_576,
+                    stats.memory_limit / 1_048_576
+                ),
+                None => "Selected container stats: unavailable".to_string(),
+            };
+            format!(
+                "Docker Engine {}\nContainers: {} total | {} running | {} paused | {} stopped\nHealth: {} running, {} paused, {} stopped\n{}\n\nPress d to refresh dashboard",
+                data.engine_version,
+                data.containers_total,
+                data.containers_running,
+                data.containers_paused,
+                data.containers_stopped,
+                data.containers_running,
+                data.containers_paused,
+                data.containers_stopped,
+                selected
+            )
+        }
+        None => "Dashboard data unavailable\nPress d to refresh dashboard".to_string(),
+    };
+    let widget =
+        Paragraph::new(text).block(Block::default().borders(Borders::ALL).title("Dashboard"));
+    f.render_widget(widget, area);
+}
+
 fn draw_container_tab(f: &mut Frame, app: &mut App, area: Rect) {
     let panes = Layout::default()
         .direction(Direction::Horizontal)
@@ -347,12 +389,12 @@ fn draw_output(f: &mut Frame, app: &mut App, area: Rect) {
     let output_list = List::new(items).block(Block::default().borders(Borders::ALL).title(
         if showing_logs {
             format!(
-                " Logs ({} líneas{}) ",
+                " Logs ({} lines{}) ",
                 total,
                 if app.logs_paused { ", paused" } else { "" }
             )
         } else {
-            format!(" Output ({} líneas) ", total)
+            format!(" Output ({} lines) ", total)
         },
     ));
 
@@ -364,7 +406,7 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
     let input_widget = Paragraph::new(text).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(" Entrada (Enter=OK, Esc=Cancelar) ")
+            .title(" Entry (Enter=OK, Esc=Cancel) ")
             .border_style(Style::default().fg(Color::Yellow)),
     );
     f.render_widget(input_widget, area);
