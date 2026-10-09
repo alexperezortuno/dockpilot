@@ -29,7 +29,7 @@
 - [x] DS-020: Optional volume backup/restore with consistency warnings.
 
 ## P4
-- [ ] DS-021: Noninteractive CLI and JSON output.
+- [x] DS-021: Noninteractive CLI and JSON output.
 - [ ] DS-022: CI, integration tests, documentation and release packaging.
 
 ## First agent assignment
