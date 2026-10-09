@@ -24,6 +24,7 @@ Completed:
 - DS-011 bounded Bollard log streaming with follow, pause, and search
 - DS-012 dashboard health summary and selected-container CPU/memory statistics
 - DS-013 Compose project actions with explicit working directories and profiles
+- DS-014 Bollard image listing with task progress for image operations
 
 The current TUI preserves the original tabbed interface for containers, images, networks, volumes, projects, machines, and help.
 
@@ -50,7 +51,7 @@ cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-Current validation includes 20 unit tests covering application navigation, Compose profile dispatch, dashboard requests, container filtering and inspection, bounded logs, configuration precedence, terminal restoration, safe command arguments, task cancellation, lifecycle policy, and engine status.
+Current validation includes 21 unit tests covering application navigation, image listing dispatch, Compose profile dispatch, dashboard requests, container filtering and inspection, bounded logs, configuration precedence, terminal restoration, safe command arguments, task cancellation, lifecycle policy, and engine status.
 
 ## Configuration
 
@@ -90,6 +91,7 @@ Polling intervals must be between 10 and 5000 milliseconds, and the project fold
 | `p` | Pause/resume log display |
 | `/` | Filter log lines |
 | `d` | Refresh dashboard data |
+| `i` | Refresh image listing |
 | `q` / `Esc` | Quit |
 | `Ctrl+C` | Quit |
 
@@ -109,7 +111,7 @@ When the container table has focus, `Enter` inspects the selected container. Lif
 
 - **Dashboard**: Docker Engine version, container health counts, and selected-container CPU/memory statistics.
 - **Container**: start/stop named containers, stop all containers, list containers, logs, create/remove, inspect process state, pause/unpause, update, and wait.
-- **Image**: build, rebuild, list, remove, push, pull, save/load, and history.
+- **Image**: list images through Bollard, build, rebuild, remove, push, pull, save/load, and history with task progress.
 - **Network**: list, create, and remove Docker networks.
 - **Volume**: list, create, and remove Docker volumes.
 - **Project**: set the project folder, run Compose up/down/config, and start with a selected Compose profile.
