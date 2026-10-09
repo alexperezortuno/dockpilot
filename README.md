@@ -126,6 +126,9 @@ Theme changes are cycled with the configured theme shortcut and saved to `dockpi
 | `Up` / `Down` | Navigate actions |
 | `Enter` | Execute selected action or prompt for a parameter |
 | `x` | Cancel the active background task |
+| `c` | Clear general output |
+| `PageUp` / `PageDown` | Scroll general output |
+| `Home` / `End` | Jump to output start/end |
 | `r` | Refresh the container table |
 | `f` | Filter/search containers |
 | `m` | Toggle container table/actions focus |
