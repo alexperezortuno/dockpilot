@@ -15,10 +15,12 @@ Completed:
   - `src/tui/` terminal rendering
 - DS-003 RAII terminal guard with terminal restoration tests
 - DS-004 explicit argument execution with metacharacter and spaced-path tests
+- DS-005 Tokio task manager with bounded events, progress, and cancellation
+- DS-006 validated TOML configuration with environment and CLI precedence
 
 The current TUI preserves the original tabbed interface for containers, images, networks, volumes, projects, machines, and help.
 
-> Important: Docker operations are still synchronous. Async task execution is scheduled for DS-005, and destructive actions still need confirmation and read-only policy enforcement.
+> Important: Output buffering is not bounded yet, and destructive actions still need confirmation and read-only policy enforcement.
 
 ## Requirements
 
@@ -41,7 +43,27 @@ cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-Current validation includes unit tests for application navigation and empty-input cancellation.
+Current validation includes 9 unit tests covering application navigation, configuration precedence, terminal restoration, safe command arguments, and task cancellation.
+
+## Configuration
+
+Copy `config.example.toml` to `config.toml` for an optional local configuration. Configuration is resolved in this order:
+
+1. Built-in defaults
+2. `config.toml` or the file passed with `--config`
+3. Environment variables
+4. CLI flags
+
+Supported environment variables and CLI flags:
+
+| Setting | Environment | CLI |
+| --- | --- | --- |
+| Project folder | `DOCKPILOT_PROJECT_FOLDER` | `--project-folder PATH` |
+| Poll interval | `DOCKPILOT_POLL_INTERVAL_MS` | `--poll-interval-ms MILLISECONDS` |
+| Safe mode | `DOCKPILOT_SAFE_MODE` | `--safe-mode BOOL` |
+| Read-only mode | `DOCKPILOT_READ_ONLY` | `--read-only BOOL` |
+
+Polling intervals must be between 10 and 5000 milliseconds, and the project folder must exist.
 
 ## Controls
 
@@ -53,6 +75,7 @@ Current validation includes unit tests for application navigation and empty-inpu
 | `Shift+Tab` | Previous tab |
 | `Up` / `Down` | Navigate actions |
 | `Enter` | Execute selected action or prompt for a parameter |
+| `x` | Cancel the active background task |
 | `q` / `Esc` | Quit |
 | `Ctrl+C` | Quit |
 
@@ -81,6 +104,7 @@ src/
   main.rs       Terminal setup and event loop
   app/          Application state, navigation, input, and actions
   docker/       Docker command execution
+  tasks/        Tokio task manager and bounded task events
   tui/          Ratatui rendering
 ```
 
@@ -90,7 +114,7 @@ The target architecture is:
 TUI -> application state/actions/events -> Docker services -> Bollard or docker compose CLI
 ```
 
-Phase 1 will add terminal guards, safe argument execution, asynchronous tasks, configuration, and safety policies before resource-first screens are implemented.
+Phase 1 still needs validated configuration and safety policies before resource-first screens are implemented.
 
 ## Safety goals
 
