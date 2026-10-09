@@ -2,13 +2,15 @@ use crate::{
     docker::{
         CommandSpec,
         client::{
-            ContainerLifecycle, ContainerRow, DashboardData, ImageRow, apply_container_lifecycle,
-            dashboard_data, inspect_container, list_containers, list_images, start_all_containers,
+            ContainerLifecycle, ContainerRow, DashboardData, ImageRow, NetworkRow, VolumeRow,
+            apply_container_lifecycle, dashboard_data, inspect_container, list_containers,
+            list_images, list_networks, list_volumes, start_all_containers,
         },
         run_command, run_stop_all,
     },
     security::Mutation,
 };
+use bollard::query_parameters::EventsOptions;
 use bollard::query_parameters::LogsOptionsBuilder;
 use futures_util::StreamExt;
 use tokio::{sync::mpsc, task::JoinHandle};
@@ -22,6 +24,8 @@ pub enum TaskRequest {
     StartAll,
     ListContainers,
     ListImages,
+    ListNetworks,
+    ListVolumes,
     InspectContainer {
         id: String,
     },
@@ -36,6 +40,10 @@ pub enum TaskRequest {
     Dashboard {
         selected_id: Option<String>,
     },
+    DiskUsage {
+        preview: bool,
+    },
+    Events,
 }
 
 impl TaskRequest {
@@ -46,6 +54,7 @@ impl TaskRequest {
             Self::StartAll => Mutation::Mutating,
             Self::ListContainers => Mutation::ReadOnly,
             Self::ListImages => Mutation::ReadOnly,
+            Self::ListNetworks | Self::ListVolumes => Mutation::ReadOnly,
             Self::InspectContainer { .. } => Mutation::ReadOnly,
             Self::ContainerLifecycle { operation, .. } => {
                 if *operation == ContainerLifecycle::Remove {
@@ -56,6 +65,8 @@ impl TaskRequest {
             }
             Self::ContainerLogs { .. } => Mutation::ReadOnly,
             Self::Dashboard { .. } => Mutation::ReadOnly,
+            Self::DiskUsage { .. } => Mutation::ReadOnly,
+            Self::Events => Mutation::ReadOnly,
         }
     }
 
@@ -66,6 +77,8 @@ impl TaskRequest {
             Self::StartAll => "start all containers".to_string(),
             Self::ListContainers => "list containers".to_string(),
             Self::ListImages => "list images".to_string(),
+            Self::ListNetworks => "list networks".to_string(),
+            Self::ListVolumes => "list volumes".to_string(),
             Self::InspectContainer { id } => format!("inspect container {}", id),
             Self::ContainerLifecycle { id, operation } => {
                 format!("{} container {}", operation.label(), id)
@@ -74,6 +87,13 @@ impl TaskRequest {
                 format!("logs {}{}", id, if *follow { " (follow)" } else { "" })
             }
             Self::Dashboard { .. } => "update dashboard".to_string(),
+            Self::DiskUsage { preview } => if *preview {
+                "preview cleanup"
+            } else {
+                "inspect disk usage"
+            }
+            .to_string(),
+            Self::Events => "stream Docker events".to_string(),
         }
     }
 }
@@ -98,12 +118,24 @@ pub enum TaskEvent {
         id: u64,
         images: Vec<ImageRow>,
     },
+    Networks {
+        id: u64,
+        networks: Vec<NetworkRow>,
+    },
+    Volumes {
+        id: u64,
+        volumes: Vec<VolumeRow>,
+    },
     LogLine {
         line: String,
     },
     Dashboard {
         id: u64,
         data: DashboardData,
+    },
+    EventLine {
+        line: String,
+        alert: Option<String>,
     },
 }
 
@@ -155,6 +187,8 @@ impl TaskManager {
                 TaskRequest::StartAll => "starting stopped containers".to_string(),
                 TaskRequest::ListContainers => "querying containers".to_string(),
                 TaskRequest::ListImages => "querying images".to_string(),
+                TaskRequest::ListNetworks => "querying networks".to_string(),
+                TaskRequest::ListVolumes => "querying volumes".to_string(),
                 TaskRequest::InspectContainer { id } => format!("inspecting {}", id),
                 TaskRequest::ContainerLifecycle { id, operation } => {
                     format!("{} container {}", operation.label(), id)
@@ -163,6 +197,13 @@ impl TaskManager {
                     format!("logs {}{}", id, if *follow { " (follow)" } else { "" })
                 }
                 TaskRequest::Dashboard { .. } => "updating dashboard".to_string(),
+                TaskRequest::DiskUsage { preview } => if *preview {
+                    "building cleanup preview"
+                } else {
+                    "querying disk usage"
+                }
+                .to_string(),
+                TaskRequest::Events => "streaming Docker events".to_string(),
             };
             if sender
                 .send(TaskEvent::Progress {
@@ -271,6 +312,65 @@ impl TaskManager {
                                 id,
                                 lines: vec![
                                     "[docker] Engine disconnected; cannot list images".to_string(),
+                                    String::new(),
+                                ],
+                            })
+                            .await;
+                    }
+                },
+                TaskRequest::ListNetworks => match client {
+                    Some(client) => match list_networks(&client).await {
+                        Ok(networks) => {
+                            let _ = sender.send(TaskEvent::Networks { id, networks }).await;
+                        }
+                        Err(error) => {
+                            let _ = sender
+                                .send(TaskEvent::Finished {
+                                    id,
+                                    lines: vec![
+                                        format!("[docker] network list failed: {}", error),
+                                        String::new(),
+                                    ],
+                                })
+                                .await;
+                        }
+                    },
+                    None => {
+                        let _ = sender
+                            .send(TaskEvent::Finished {
+                                id,
+                                lines: vec![
+                                    "[docker] Engine disconnected; cannot list networks"
+                                        .to_string(),
+                                    String::new(),
+                                ],
+                            })
+                            .await;
+                    }
+                },
+                TaskRequest::ListVolumes => match client {
+                    Some(client) => match list_volumes(&client).await {
+                        Ok(volumes) => {
+                            let _ = sender.send(TaskEvent::Volumes { id, volumes }).await;
+                        }
+                        Err(error) => {
+                            let _ = sender
+                                .send(TaskEvent::Finished {
+                                    id,
+                                    lines: vec![
+                                        format!("[docker] volume list failed: {}", error),
+                                        String::new(),
+                                    ],
+                                })
+                                .await;
+                        }
+                    },
+                    None => {
+                        let _ = sender
+                            .send(TaskEvent::Finished {
+                                id,
+                                lines: vec![
+                                    "[docker] Engine disconnected; cannot list volumes".to_string(),
                                     String::new(),
                                 ],
                             })
@@ -426,6 +526,101 @@ impl TaskManager {
                                 lines: vec![
                                     "[docker] Engine disconnected; dashboard unavailable"
                                         .to_string(),
+                                    String::new(),
+                                ],
+                            })
+                            .await;
+                    }
+                },
+                TaskRequest::DiskUsage { preview } => match client {
+                    Some(client) => {
+                        match crate::docker::client::disk_usage_lines(&client, preview).await {
+                            Ok(lines) => {
+                                let _ = sender.send(TaskEvent::Finished { id, lines }).await;
+                            }
+                            Err(error) => {
+                                let _ = sender
+                                    .send(TaskEvent::Finished {
+                                        id,
+                                        lines: vec![
+                                            format!("[docker] disk usage failed: {}", error),
+                                            String::new(),
+                                        ],
+                                    })
+                                    .await;
+                            }
+                        }
+                    }
+                    None => {
+                        let _ = sender
+                            .send(TaskEvent::Finished {
+                                id,
+                                lines: vec![
+                                    "[docker] Engine disconnected; disk usage unavailable"
+                                        .to_string(),
+                                    String::new(),
+                                ],
+                            })
+                            .await;
+                    }
+                },
+                TaskRequest::Events => match client {
+                    Some(client) => {
+                        let mut stream = client.events(None::<EventsOptions>);
+                        while let Some(result) = stream.next().await {
+                            match result {
+                                Ok(event) => {
+                                    let event_type = event
+                                        .typ
+                                        .map(|value| value.to_string())
+                                        .unwrap_or_else(|| "unknown".to_string());
+                                    let action =
+                                        event.action.unwrap_or_else(|| "unknown".to_string());
+                                    let id = event
+                                        .actor
+                                        .and_then(|actor| actor.id)
+                                        .unwrap_or_else(|| "-".to_string());
+                                    let line = format!("{} {} {}", event_type, action, id);
+                                    let lower = line.to_lowercase();
+                                    let alert = ["die", "kill", "oom", "destroy", "unhealthy"]
+                                        .iter()
+                                        .any(|marker| lower.contains(marker))
+                                        .then(|| format!("[alert] {}", line));
+                                    if sender
+                                        .send(TaskEvent::EventLine { line, alert })
+                                        .await
+                                        .is_err()
+                                    {
+                                        return;
+                                    }
+                                }
+                                Err(error) => {
+                                    let _ = sender
+                                        .send(TaskEvent::Finished {
+                                            id,
+                                            lines: vec![
+                                                format!("[docker] events failed: {}", error),
+                                                String::new(),
+                                            ],
+                                        })
+                                        .await;
+                                    return;
+                                }
+                            }
+                        }
+                        let _ = sender
+                            .send(TaskEvent::Finished {
+                                id,
+                                lines: Vec::new(),
+                            })
+                            .await;
+                    }
+                    None => {
+                        let _ = sender
+                            .send(TaskEvent::Finished {
+                                id,
+                                lines: vec![
+                                    "[docker] Engine disconnected; events unavailable".to_string(),
                                     String::new(),
                                 ],
                             })

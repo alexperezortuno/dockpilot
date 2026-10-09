@@ -51,6 +51,21 @@ pub struct ImageRow {
     pub size: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetworkRow {
+    pub id: String,
+    pub name: String,
+    pub driver: String,
+    pub scope: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VolumeRow {
+    pub name: String,
+    pub driver: String,
+    pub mountpoint: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContainerStats {
     pub id: String,
@@ -144,6 +159,96 @@ pub async fn list_images(client: &Docker) -> Result<Vec<ImageRow>, String> {
             size: image.size,
         })
         .collect())
+}
+
+pub async fn list_networks(client: &Docker) -> Result<Vec<NetworkRow>, String> {
+    let networks = client
+        .list_networks(None::<bollard::query_parameters::ListNetworksOptions>)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(networks
+        .into_iter()
+        .map(|network| NetworkRow {
+            id: network
+                .id
+                .unwrap_or_else(|| "-".to_string())
+                .chars()
+                .take(12)
+                .collect(),
+            name: network.name.unwrap_or_else(|| "-".to_string()),
+            driver: network.driver.unwrap_or_else(|| "-".to_string()),
+            scope: network.scope.unwrap_or_else(|| "-".to_string()),
+        })
+        .collect())
+}
+
+pub async fn list_volumes(client: &Docker) -> Result<Vec<VolumeRow>, String> {
+    let response = client
+        .list_volumes(None::<bollard::query_parameters::ListVolumesOptions>)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(response
+        .volumes
+        .unwrap_or_default()
+        .into_iter()
+        .map(|volume| VolumeRow {
+            name: volume.name,
+            driver: volume.driver,
+            mountpoint: volume.mountpoint,
+        })
+        .collect())
+}
+
+pub async fn disk_usage_lines(client: &Docker, preview: bool) -> Result<Vec<String>, String> {
+    let usage = client
+        .df(None::<bollard::query_parameters::DataUsageOptions>)
+        .await
+        .map_err(|error| error.to_string())?;
+    let images = usage.images.unwrap_or_default();
+    let containers = usage.containers.unwrap_or_default();
+    let volumes = usage.volumes.unwrap_or_default();
+    let reclaimable_images = images
+        .iter()
+        .filter(|image| image.repo_tags.is_empty())
+        .count();
+    let stopped_containers = containers
+        .iter()
+        .filter(|container| {
+            container
+                .state
+                .as_ref()
+                .is_none_or(|state| state.to_string() != "running")
+        })
+        .count();
+    let heading = if preview {
+        "Cleanup preview"
+    } else {
+        "Disk usage"
+    };
+
+    Ok(vec![
+        format!("[docker] {}", heading),
+        format!(
+            "[docker] image layers: {} bytes",
+            usage.layers_size.unwrap_or(0)
+        ),
+        format!(
+            "[docker] images: {} total, {} untagged candidates",
+            images.len(),
+            reclaimable_images
+        ),
+        format!(
+            "[docker] containers: {} total, {} stopped candidates",
+            containers.len(),
+            stopped_containers
+        ),
+        format!(
+            "[docker] volumes: {} total, unused status requires resource inspection",
+            volumes.len()
+        ),
+        "[docker] no cleanup mutation was executed".to_string(),
+        String::new(),
+    ])
 }
 
 pub async fn inspect_container(client: &Docker, id: &str) -> Result<Vec<String>, String> {

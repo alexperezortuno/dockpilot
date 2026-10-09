@@ -5,6 +5,8 @@ use std::{env, fmt, path::PathBuf, str::FromStr};
 const DEFAULT_CONFIG_FILE: &str = "config.toml";
 const MIN_POLL_INTERVAL_MS: u64 = 10;
 const MAX_POLL_INTERVAL_MS: u64 = 5_000;
+const DEFAULT_OUTPUT_CAPACITY: usize = 2_000;
+const MAX_OUTPUT_CAPACITY: usize = 100_000;
 const PREFERENCES_FILE: &str = "dockpilot.preferences.toml";
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq, Serialize, ValueEnum)]
@@ -37,7 +39,7 @@ impl Default for Shortcuts {
 }
 
 #[derive(Debug, Parser, Default)]
-#[command(name = "dockify", about = "Docker management TUI")]
+#[command(name = "dockpilot", about = "Docker management TUI")]
 pub struct Cli {
     /// Optional TOML configuration file. Without this flag, config.toml is used if present.
     #[arg(long, value_name = "PATH")]
@@ -50,6 +52,10 @@ pub struct Cli {
     /// Event polling interval in milliseconds.
     #[arg(long, value_name = "MILLISECONDS")]
     pub poll_interval_ms: Option<u64>,
+
+    /// Maximum general output lines retained by the TUI.
+    #[arg(long, value_name = "LINES")]
+    pub output_capacity: Option<usize>,
 
     /// Enable safe-mode policy defaults.
     #[arg(long, value_name = "BOOL")]
@@ -71,6 +77,7 @@ pub struct Cli {
 pub struct Config {
     pub project_folder: PathBuf,
     pub poll_interval_ms: u64,
+    pub output_capacity: usize,
     pub safe_mode: bool,
     pub read_only: bool,
     pub docker_context: Option<String>,
@@ -82,6 +89,7 @@ pub struct Config {
 struct PartialConfig {
     project_folder: Option<PathBuf>,
     poll_interval_ms: Option<u64>,
+    output_capacity: Option<usize>,
     safe_mode: Option<bool>,
     read_only: Option<bool>,
     docker_context: Option<String>,
@@ -119,6 +127,7 @@ impl Default for Config {
         Self {
             project_folder: env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             poll_interval_ms: 50,
+            output_capacity: DEFAULT_OUTPUT_CAPACITY,
             safe_mode: true,
             read_only: false,
             docker_context: None,
@@ -142,6 +151,7 @@ impl Config {
         let command_line = PartialConfig {
             project_folder: cli.project_folder.clone(),
             poll_interval_ms: cli.poll_interval_ms,
+            output_capacity: cli.output_capacity,
             safe_mode: cli.safe_mode,
             read_only: cli.read_only,
             docker_context: cli.docker_context.clone(),
@@ -177,6 +187,12 @@ impl Config {
                 MIN_POLL_INTERVAL_MS, MAX_POLL_INTERVAL_MS
             )));
         }
+        if !(1..=MAX_OUTPUT_CAPACITY).contains(&self.output_capacity) {
+            return Err(ConfigError::new(format!(
+                "output_capacity must be between 1 and {}",
+                MAX_OUTPUT_CAPACITY
+            )));
+        }
         if !self.project_folder.is_dir() {
             return Err(ConfigError::new(format!(
                 "project_folder is not a directory: {}",
@@ -203,6 +219,7 @@ fn environment_config() -> Result<PartialConfig, ConfigError> {
     Ok(PartialConfig {
         project_folder: env::var_os("DOCKPILOT_PROJECT_FOLDER").map(PathBuf::from),
         poll_interval_ms: parse_env("DOCKPILOT_POLL_INTERVAL_MS")?,
+        output_capacity: parse_env("DOCKPILOT_OUTPUT_CAPACITY")?,
         safe_mode: parse_env("DOCKPILOT_SAFE_MODE")?,
         read_only: parse_env("DOCKPILOT_READ_ONLY")?,
         docker_context: env::var("DOCKPILOT_DOCKER_CONTEXT").ok(),
@@ -239,6 +256,9 @@ fn resolve_layers(
         }
         if let Some(value) = layer.poll_interval_ms {
             config.poll_interval_ms = value;
+        }
+        if let Some(value) = layer.output_capacity {
+            config.output_capacity = value;
         }
         if let Some(value) = layer.safe_mode {
             config.safe_mode = value;
@@ -302,6 +322,7 @@ mod tests {
         let defaults = Config {
             project_folder: PathBuf::from("."),
             poll_interval_ms: 50,
+            output_capacity: super::DEFAULT_OUTPUT_CAPACITY,
             safe_mode: true,
             read_only: false,
             docker_context: None,
@@ -311,6 +332,7 @@ mod tests {
         let file = PartialConfig {
             project_folder: Some(PathBuf::from(".")),
             poll_interval_ms: Some(100),
+            output_capacity: Some(1000),
             safe_mode: Some(false),
             read_only: Some(false),
             docker_context: None,
@@ -320,6 +342,7 @@ mod tests {
         let environment = PartialConfig {
             project_folder: None,
             poll_interval_ms: Some(200),
+            output_capacity: None,
             safe_mode: Some(true),
             read_only: Some(true),
             docker_context: None,
@@ -329,6 +352,7 @@ mod tests {
         let command_line = PartialConfig {
             project_folder: Some(PathBuf::from(".")),
             poll_interval_ms: Some(500),
+            output_capacity: None,
             safe_mode: None,
             read_only: Some(false),
             docker_context: None,
