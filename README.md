@@ -17,10 +17,11 @@ Completed:
 - DS-004 explicit argument execution with metacharacter and spaced-path tests
 - DS-005 Tokio task manager with bounded events, progress, and cancellation
 - DS-006 validated TOML configuration with environment and CLI precedence
+- DS-007 safe-mode confirmations and read-only mutation blocking
 
 The current TUI preserves the original tabbed interface for containers, images, networks, volumes, projects, machines, and help.
 
-> Important: Output buffering is not bounded yet, and destructive actions still need confirmation and read-only policy enforcement.
+> Important: Output buffering is not bounded yet. Safety policy is configured at startup; safe mode confirms mutations, destructive actions always require confirmation, and read-only mode blocks mutations.
 
 ## Requirements
 
@@ -114,7 +115,7 @@ The target architecture is:
 TUI -> application state/actions/events -> Docker services -> Bollard or docker compose CLI
 ```
 
-Phase 1 still needs validated configuration and safety policies before resource-first screens are implemented.
+Phase 1 is complete. Resource-first screens can now be implemented in Phase 2.
 
 ## Safety goals
 
