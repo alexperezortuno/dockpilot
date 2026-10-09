@@ -104,10 +104,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     app.set_images(images);
                     app.push_output(format!("[docker] loaded {} images", count));
                     task_manager.complete(id);
+                    if task_manager.has_client() {
+                        task_manager.spawn(TaskRequest::ListNetworks);
+                    }
                 }
                 TaskEvent::Networks { id, networks } => {
                     app.set_networks(networks);
                     task_manager.complete(id);
+                    if task_manager.has_client() {
+                        task_manager.spawn(TaskRequest::ListVolumes);
+                    }
                 }
                 TaskEvent::Volumes { id, volumes } => {
                     app.set_volumes(volumes);
