@@ -5,6 +5,7 @@ use bollard::{
 };
 use futures_util::StreamExt;
 use std::fmt;
+use tokio::process::Command;
 use tokio::time::{Duration, timeout};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,6 +32,7 @@ impl fmt::Display for EngineStatus {
 pub struct EngineConnection {
     client: Option<Docker>,
     status: EngineStatus,
+    context: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -322,13 +324,15 @@ pub async fn dashboard_data(
 }
 
 impl EngineConnection {
-    pub async fn connect() -> Self {
-        let client = match Docker::connect_with_local_defaults() {
+    pub async fn connect(context: Option<&str>) -> Self {
+        let context = context.unwrap_or("default").to_string();
+        let client = match connect_for_context(&context).await {
             Ok(client) => client,
             Err(error) => {
                 return Self {
                     client: None,
                     status: EngineStatus::Disconnected(error.to_string()),
+                    context,
                 };
             }
         };
@@ -344,7 +348,11 @@ impl EngineConnection {
             None
         };
 
-        Self { client, status }
+        Self {
+            client,
+            status,
+            context,
+        }
     }
 
     pub fn status(&self) -> &EngineStatus {
@@ -352,7 +360,7 @@ impl EngineConnection {
     }
 
     pub fn status_message(&self) -> String {
-        self.status.message()
+        format!("{} (context: {})", self.status, self.context)
     }
 
     pub fn into_client(self) -> Option<Docker> {
@@ -360,9 +368,55 @@ impl EngineConnection {
     }
 }
 
+async fn connect_for_context(context: &str) -> Result<Docker, String> {
+    if context == "default" {
+        return Docker::connect_with_local_defaults().map_err(|error| error.to_string());
+    }
+
+    let output = Command::new("docker")
+        .args([
+            "context",
+            "inspect",
+            "--format",
+            "{{json .Endpoints.docker.Host}}",
+            context,
+        ])
+        .output()
+        .await
+        .map_err(|error| format!("cannot inspect Docker context {}: {}", context, error))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Docker context {} unavailable: {}",
+            context,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let host = parse_context_host(&output.stdout)
+        .map_err(|error| format!("invalid Docker context {} output: {}", context, error))?;
+
+    if host.starts_with("ssh://") {
+        Docker::connect_with_ssh(&host, 120, bollard::API_DEFAULT_VERSION)
+            .map_err(|error| error.to_string())
+    } else if host.starts_with("unix://") || host.starts_with("npipe://") {
+        Docker::connect_with_socket(&host, 120, bollard::API_DEFAULT_VERSION)
+            .map_err(|error| error.to_string())
+    } else {
+        Docker::connect_with_http(&host, 120, bollard::API_DEFAULT_VERSION)
+            .map_err(|error| error.to_string())
+    }
+}
+
+fn parse_context_host(output: &[u8]) -> Result<String, String> {
+    serde_json::from_slice::<serde_json::Value>(output)
+        .map_err(|error| error.to_string())?
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| "context has no engine endpoint".to_string())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::EngineStatus;
+    use super::{EngineStatus, parse_context_host};
 
     #[test]
     fn status_messages_are_actionable() {
@@ -370,6 +424,14 @@ mod tests {
         assert_eq!(
             EngineStatus::Disconnected("daemon unavailable".to_string()).message(),
             "disconnected: daemon unavailable"
+        );
+    }
+
+    #[test]
+    fn parses_context_endpoint_without_shell_processing() {
+        assert_eq!(
+            parse_context_host(br#""unix:///var/run/docker.sock""#).unwrap(),
+            "unix:///var/run/docker.sock"
         );
     }
 }
