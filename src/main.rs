@@ -26,10 +26,7 @@ fn dispatch_request(
     let mutation = request.mutation();
     let description = request.description();
     if !policy.allows(mutation) {
-        app.push_output(format!(
-            "[blocked: read-only context: {}]",
-            description
-        ));
+        app.push_output(format!("[blocked: read-only context: {}]", description));
         return;
     }
     if !confirmed && policy.requires_confirmation(mutation) {
