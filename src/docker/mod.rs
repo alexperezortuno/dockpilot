@@ -1,10 +1,5 @@
-use std::{
-    ffi::OsString,
-    fs::File,
-    io,
-    path::PathBuf,
-    process::{Command, Output, Stdio},
-};
+use std::{ffi::OsString, fs::File, io, path::PathBuf, process::Stdio};
+use tokio::process::Command;
 
 #[derive(Debug, Clone)]
 pub struct CommandSpec {
@@ -55,7 +50,7 @@ impl CommandSpec {
         self
     }
 
-    fn display(&self) -> String {
+    pub(crate) fn display(&self) -> String {
         let mut parts = vec![self.program.to_string_lossy().into_owned()];
         parts.extend(
             self.args
@@ -66,7 +61,27 @@ impl CommandSpec {
     }
 }
 
-fn run(spec: &CommandSpec) -> io::Result<Output> {
+#[derive(Debug)]
+pub struct CommandResult {
+    pub lines: Vec<String>,
+    pub stdout: Vec<u8>,
+    pub success: bool,
+}
+
+fn failed_result(display: &str, error: io::Error) -> CommandResult {
+    CommandResult {
+        lines: vec![
+            format!("$ {}", display),
+            format!("[error ejecutando comando: {}]", error),
+            String::new(),
+        ],
+        stdout: Vec::new(),
+        success: false,
+    }
+}
+
+pub async fn run_command(spec: CommandSpec) -> CommandResult {
+    let display = spec.display();
     let mut command = Command::new(&spec.program);
     command.args(&spec.args);
 
@@ -74,16 +89,40 @@ fn run(spec: &CommandSpec) -> io::Result<Output> {
         command.current_dir(path);
     }
     if let Some(path) = &spec.stdin_path {
-        command.stdin(Stdio::from(File::open(path)?));
+        match File::open(path) {
+            Ok(file) => {
+                command.stdin(Stdio::from(file));
+            }
+            Err(error) => return failed_result(&display, error),
+        }
     }
     if let Some(path) = &spec.stdout_path {
-        command.stdout(Stdio::from(File::create(path)?));
+        match File::create(path) {
+            Ok(file) => {
+                command.stdout(Stdio::from(file));
+            }
+            Err(error) => return failed_result(&display, error),
+        }
     }
 
-    command.output()
+    let output = command.kill_on_drop(true).output().await;
+
+    match output {
+        Ok(output) => {
+            let mut lines = vec![format!("$ {}", display)];
+            append_output(&mut lines, &output);
+            lines.push(String::new());
+            CommandResult {
+                lines,
+                stdout: output.stdout,
+                success: output.status.success(),
+            }
+        }
+        Err(error) => failed_result(&display, error),
+    }
 }
 
-fn append_output(output_lines: &mut Vec<String>, output: &Output) {
+fn append_output(output_lines: &mut Vec<String>, output: &std::process::Output) {
     if !output.stdout.is_empty() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         for line in stdout.lines() {
@@ -101,57 +140,21 @@ fn append_output(output_lines: &mut Vec<String>, output: &Output) {
     }
 }
 
-fn append_error(output_lines: &mut Vec<String>, error: &io::Error) {
-    output_lines.push(format!("[error ejecutando comando: {}]", error));
-}
-
-fn finish_command(output_lines: &mut Vec<String>, output_scroll: &mut u16) {
-    output_lines.push(String::new());
-    *output_scroll = output_lines.len() as u16;
-}
-
-pub fn execute_command(output_lines: &mut Vec<String>, output_scroll: &mut u16, spec: CommandSpec) {
-    output_lines.push(format!("$ {}", spec.display()));
-    *output_scroll = output_lines.len() as u16;
-
-    match run(&spec) {
-        Ok(output) => append_output(output_lines, &output),
-        Err(error) => append_error(output_lines, &error),
-    }
-
-    finish_command(output_lines, output_scroll);
-}
-
-pub fn stop_all(output_lines: &mut Vec<String>, output_scroll: &mut u16) {
+pub async fn run_stop_all() -> Vec<CommandResult> {
     let list_spec = CommandSpec::new("docker").args(["ps", "-aq"]);
-    output_lines.push(format!("$ {}", list_spec.display()));
-    *output_scroll = output_lines.len() as u16;
-
-    let output = match run(&list_spec) {
-        Ok(output) => output,
-        Err(error) => {
-            append_error(output_lines, &error);
-            finish_command(output_lines, output_scroll);
-            return;
-        }
-    };
-
-    append_output(output_lines, &output);
-    if !output.status.success() {
-        finish_command(output_lines, output_scroll);
-        return;
+    let list_result = run_command(list_spec).await;
+    if !list_result.success {
+        return vec![list_result];
     }
 
-    finish_command(output_lines, output_scroll);
-    for id in String::from_utf8_lossy(&output.stdout).lines() {
+    let mut results = vec![list_result];
+    let ids = String::from_utf8_lossy(&results[0].stdout).into_owned();
+    for id in ids.lines() {
         if !id.is_empty() {
-            execute_command(
-                output_lines,
-                output_scroll,
-                CommandSpec::new("docker").args(["stop", id]),
-            );
+            results.push(run_command(CommandSpec::new("docker").args(["stop", id])).await);
         }
     }
+    results
 }
 
 #[cfg(test)]
