@@ -19,6 +19,7 @@ Completed:
 - DS-006 validated TOML configuration with environment and CLI precedence
 - DS-007 safe-mode confirmations and read-only mutation blocking
 - DS-008 Bollard Docker Engine connection with disconnected-state handling
+- DS-009 Bollard container table with selection, sorting, filtering, and refresh
 
 The current TUI preserves the original tabbed interface for containers, images, networks, volumes, projects, machines, and help.
 
@@ -45,7 +46,7 @@ cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-Current validation includes 12 unit tests covering application navigation, configuration precedence, terminal restoration, safe command arguments, task cancellation, and engine status.
+Current validation includes 13 unit tests covering application navigation, container filtering, configuration precedence, terminal restoration, safe command arguments, task cancellation, and engine status.
 
 ## Configuration
 
@@ -78,6 +79,10 @@ Polling intervals must be between 10 and 5000 milliseconds, and the project fold
 | `Up` / `Down` | Navigate actions |
 | `Enter` | Execute selected action or prompt for a parameter |
 | `x` | Cancel the active background task |
+| `r` | Refresh the container table |
+| `f` | Filter/search containers |
+| `m` | Toggle container table/actions focus |
+| `s` | Cycle container sort field |
 | `q` / `Esc` | Quit |
 | `Ctrl+C` | Quit |
 
