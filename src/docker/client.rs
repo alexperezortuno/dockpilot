@@ -37,6 +37,25 @@ pub struct ContainerRow {
     pub status: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerLifecycle {
+    Restart,
+    Pause,
+    Unpause,
+    Remove,
+}
+
+impl ContainerLifecycle {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Restart => "restart",
+            Self::Pause => "pause",
+            Self::Unpause => "unpause",
+            Self::Remove => "remove",
+        }
+    }
+}
+
 pub async fn list_containers(client: &Docker) -> Result<Vec<ContainerRow>, String> {
     let options = ListContainersOptionsBuilder::new().all(true).build();
     let containers = client
@@ -63,6 +82,75 @@ pub async fn list_containers(client: &Docker) -> Result<Vec<ContainerRow>, Strin
             status: container.status.unwrap_or_else(|| "-".to_string()),
         })
         .collect())
+}
+
+pub async fn inspect_container(client: &Docker, id: &str) -> Result<Vec<String>, String> {
+    let container = client
+        .inspect_container(
+            id,
+            None::<bollard::query_parameters::InspectContainerOptions>,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    let state = container
+        .state
+        .and_then(|state| state.status)
+        .map(|state| state.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    let image = container
+        .config
+        .and_then(|config| config.image)
+        .unwrap_or_else(|| "unknown".to_string());
+    let name = container
+        .name
+        .map(|name| name.trim_start_matches('/').to_string())
+        .unwrap_or_else(|| id.to_string());
+
+    Ok(vec![
+        format!(
+            "[inspect] id: {}",
+            container.id.unwrap_or_else(|| id.to_string())
+        ),
+        format!("[inspect] name: {}", name),
+        format!("[inspect] image: {}", image),
+        format!("[inspect] state: {}", state),
+        String::new(),
+    ])
+}
+
+pub async fn apply_container_lifecycle(
+    client: &Docker,
+    id: &str,
+    operation: ContainerLifecycle,
+) -> Result<Vec<String>, String> {
+    let result = match operation {
+        ContainerLifecycle::Restart => {
+            client
+                .restart_container(
+                    id,
+                    None::<bollard::query_parameters::RestartContainerOptions>,
+                )
+                .await
+        }
+        ContainerLifecycle::Pause => client.pause_container(id).await,
+        ContainerLifecycle::Unpause => client.unpause_container(id).await,
+        ContainerLifecycle::Remove => {
+            client
+                .remove_container(
+                    id,
+                    None::<bollard::query_parameters::RemoveContainerOptions>,
+                )
+                .await
+        }
+    };
+    result
+        .map(|_| {
+            vec![
+                format!("[docker] {} container {}", operation.label(), id),
+                String::new(),
+            ]
+        })
+        .map_err(|error| error.to_string())
 }
 
 impl EngineConnection {
