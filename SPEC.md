@@ -1,4 +1,4 @@
-# Docker Simplifier v2 — Product Specification
+# Dockpilot v2 — Product Specification
 
 ## Objective
 A fast, safe, configurable, keyboard-first Docker management TUI for local and remote Docker contexts.
