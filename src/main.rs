@@ -119,6 +119,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     app.set_volumes(volumes);
                     task_manager.complete(id);
                 }
+                TaskEvent::EventLine { line, alert } => {
+                    app.push_event(line, alert);
+                }
             }
         }
 
@@ -192,6 +195,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         (KeyCode::Char('i'), _) => Some(TaskRequest::ListImages),
                         (KeyCode::Char('n'), _) => Some(TaskRequest::ListNetworks),
                         (KeyCode::Char('v'), _) => Some(TaskRequest::ListVolumes),
+                        (KeyCode::Char('e'), _) => Some(TaskRequest::Events),
+                        (KeyCode::Char('u'), _) => Some(TaskRequest::DiskUsage { preview: false }),
+                        (KeyCode::Char('k'), _) => Some(TaskRequest::DiskUsage { preview: true }),
                         (KeyCode::Char('f'), _) => {
                             app.start_container_filter();
                             None
