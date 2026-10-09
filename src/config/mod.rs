@@ -28,6 +28,10 @@ pub struct Cli {
     /// Block mutating actions.
     #[arg(long, value_name = "BOOL")]
     pub read_only: Option<bool>,
+
+    /// Docker context name.
+    #[arg(long, value_name = "NAME")]
+    pub docker_context: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -36,6 +40,7 @@ pub struct Config {
     pub poll_interval_ms: u64,
     pub safe_mode: bool,
     pub read_only: bool,
+    pub docker_context: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
@@ -44,6 +49,7 @@ struct PartialConfig {
     poll_interval_ms: Option<u64>,
     safe_mode: Option<bool>,
     read_only: Option<bool>,
+    docker_context: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,6 +76,7 @@ impl Default for Config {
             poll_interval_ms: 50,
             safe_mode: true,
             read_only: false,
+            docker_context: None,
         }
     }
 }
@@ -86,6 +93,7 @@ impl Config {
             poll_interval_ms: cli.poll_interval_ms,
             safe_mode: cli.safe_mode,
             read_only: cli.read_only,
+            docker_context: cli.docker_context.clone(),
         };
 
         resolve_layers(Self::default(), file, environment, command_line)
@@ -126,6 +134,7 @@ fn environment_config() -> Result<PartialConfig, ConfigError> {
         poll_interval_ms: parse_env("DOCKPILOT_POLL_INTERVAL_MS")?,
         safe_mode: parse_env("DOCKPILOT_SAFE_MODE")?,
         read_only: parse_env("DOCKPILOT_READ_ONLY")?,
+        docker_context: env::var("DOCKPILOT_DOCKER_CONTEXT").ok(),
     })
 }
 
@@ -163,6 +172,9 @@ fn resolve_layers(
         if let Some(value) = layer.read_only {
             config.read_only = value;
         }
+        if let Some(value) = layer.docker_context {
+            config.docker_context = Some(value);
+        }
     }
     config.validate()?;
     Ok(config)
@@ -180,24 +192,28 @@ mod tests {
             poll_interval_ms: 50,
             safe_mode: true,
             read_only: false,
+            docker_context: None,
         };
         let file = PartialConfig {
             project_folder: Some(PathBuf::from(".")),
             poll_interval_ms: Some(100),
             safe_mode: Some(false),
             read_only: Some(false),
+            docker_context: None,
         };
         let environment = PartialConfig {
             project_folder: None,
             poll_interval_ms: Some(200),
             safe_mode: Some(true),
             read_only: Some(true),
+            docker_context: None,
         };
         let command_line = PartialConfig {
             project_folder: Some(PathBuf::from(".")),
             poll_interval_ms: Some(500),
             safe_mode: None,
             read_only: Some(false),
+            docker_context: None,
         };
 
         let config = resolve_layers(defaults, file, environment, command_line).unwrap();
