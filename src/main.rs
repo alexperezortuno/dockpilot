@@ -236,6 +236,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             should_quit = true;
                             None
                         }
+                        (KeyCode::Char('c'), _) => {
+                            app.clear_output();
+                            None
+                        }
                         (KeyCode::Char(key), _) if key == shortcuts.cancel_task => {
                             if task_manager.cancel() {
                                 app.push_output("[task cancelled]");
@@ -290,6 +294,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         (KeyCode::Down, _) => {
                             app.next();
+                            None
+                        }
+                        (KeyCode::PageUp, _) => {
+                            app.scroll_output_up(10);
+                            None
+                        }
+                        (KeyCode::PageDown, _) => {
+                            app.scroll_output_down(10);
+                            None
+                        }
+                        (KeyCode::Home, _) => {
+                            app.scroll_output_home();
+                            None
+                        }
+                        (KeyCode::End, _) => {
+                            app.scroll_output_end();
                             None
                         }
                         (KeyCode::Enter, _) => app.execute_selected(),
