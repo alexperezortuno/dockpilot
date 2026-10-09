@@ -85,6 +85,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     app.push_output(format!("[docker] loaded {} containers", count));
                     task_manager.complete(id);
                 }
+                TaskEvent::LogLine { line } => {
+                    app.push_log_line(line);
+                }
             }
         }
 
@@ -162,6 +165,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         (KeyCode::Char('s'), _) => {
                             app.toggle_container_sort();
+                            None
+                        }
+                        (KeyCode::Char('p'), _) => {
+                            app.toggle_logs_paused();
+                            None
+                        }
+                        (KeyCode::Char('/'), _) => {
+                            app.start_log_filter();
                             None
                         }
                         (KeyCode::Tab, _) => {
