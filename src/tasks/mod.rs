@@ -14,7 +14,12 @@ use bollard::query_parameters::EventsOptions;
 use bollard::query_parameters::LogsOptionsBuilder;
 use futures_util::StreamExt;
 use ssh2::Session;
-use std::{fs::File, io, net::TcpStream, path::Path};
+use std::{
+    fs::File,
+    io::{self, Write},
+    net::TcpStream,
+    path::Path,
+};
 use tokio::{sync::mpsc, task::JoinHandle};
 
 pub enum TaskRequest {
@@ -717,15 +722,17 @@ fn upload_via_ssh(
         return Err("SSH authentication failed".to_string());
     }
     let mut local = File::open(local_archive).map_err(|error| error.to_string())?;
-    let size = local.metadata().map_err(|error| error.to_string())?.len();
-    let mut remote = session
-        .scp_send(Path::new(remote_path), 0o600, size, None)
-        .map_err(|error| error.to_string())?;
+    let sftp = session.sftp().map_err(|error| error.to_string())?;
+    let mut remote = sftp
+        .open_mode(
+            Path::new(remote_path),
+            ssh2::OpenFlags::WRITE | ssh2::OpenFlags::CREATE | ssh2::OpenFlags::TRUNCATE,
+            0o600,
+            ssh2::OpenType::File,
+        )
+        .map_err(|error| format!("cannot open remote path {}: {}", remote_path, error))?;
     io::copy(&mut local, &mut remote).map_err(|error| error.to_string())?;
-    remote.send_eof().map_err(|error| error.to_string())?;
-    remote.wait_eof().map_err(|error| error.to_string())?;
-    remote.close().map_err(|error| error.to_string())?;
-    remote.wait_close().map_err(|error| error.to_string())?;
+    remote.flush().map_err(|error| error.to_string())?;
     Ok(vec![
         format!("[ssh] uploaded archive to {}:{}", host, remote_path),
         String::new(),
