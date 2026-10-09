@@ -2,8 +2,8 @@ use crate::{
     docker::{
         CommandSpec,
         client::{
-            ContainerLifecycle, ContainerRow, DashboardData, apply_container_lifecycle,
-            dashboard_data, inspect_container, list_containers, start_all_containers,
+            ContainerLifecycle, ContainerRow, DashboardData, ImageRow, apply_container_lifecycle,
+            dashboard_data, inspect_container, list_containers, list_images, start_all_containers,
         },
         run_command, run_stop_all,
     },
@@ -21,6 +21,7 @@ pub enum TaskRequest {
     StopAll,
     StartAll,
     ListContainers,
+    ListImages,
     InspectContainer {
         id: String,
     },
@@ -44,6 +45,7 @@ impl TaskRequest {
             Self::StopAll => Mutation::Destructive,
             Self::StartAll => Mutation::Mutating,
             Self::ListContainers => Mutation::ReadOnly,
+            Self::ListImages => Mutation::ReadOnly,
             Self::InspectContainer { .. } => Mutation::ReadOnly,
             Self::ContainerLifecycle { operation, .. } => {
                 if *operation == ContainerLifecycle::Remove {
@@ -63,6 +65,7 @@ impl TaskRequest {
             Self::StopAll => "stop all containers".to_string(),
             Self::StartAll => "start all containers".to_string(),
             Self::ListContainers => "list containers".to_string(),
+            Self::ListImages => "list images".to_string(),
             Self::InspectContainer { id } => format!("inspect container {}", id),
             Self::ContainerLifecycle { id, operation } => {
                 format!("{} container {}", operation.label(), id)
@@ -90,6 +93,10 @@ pub enum TaskEvent {
     Containers {
         id: u64,
         containers: Vec<ContainerRow>,
+    },
+    Images {
+        id: u64,
+        images: Vec<ImageRow>,
     },
     LogLine {
         line: String,
@@ -147,6 +154,7 @@ impl TaskManager {
                 TaskRequest::StopAll => "stopping active containers".to_string(),
                 TaskRequest::StartAll => "starting stopped containers".to_string(),
                 TaskRequest::ListContainers => "querying containers".to_string(),
+                TaskRequest::ListImages => "querying images".to_string(),
                 TaskRequest::InspectContainer { id } => format!("inspecting {}", id),
                 TaskRequest::ContainerLifecycle { id, operation } => {
                     format!("{} container {}", operation.label(), id)
@@ -234,6 +242,35 @@ impl TaskManager {
                                 lines: vec![
                                     "[docker] Engine disconnected; cannot list containers"
                                         .to_string(),
+                                    String::new(),
+                                ],
+                            })
+                            .await;
+                    }
+                },
+                TaskRequest::ListImages => match client {
+                    Some(client) => match list_images(&client).await {
+                        Ok(images) => {
+                            let _ = sender.send(TaskEvent::Images { id, images }).await;
+                        }
+                        Err(error) => {
+                            let _ = sender
+                                .send(TaskEvent::Finished {
+                                    id,
+                                    lines: vec![
+                                        format!("[docker] image list failed: {}", error),
+                                        String::new(),
+                                    ],
+                                })
+                                .await;
+                        }
+                    },
+                    None => {
+                        let _ = sender
+                            .send(TaskEvent::Finished {
+                                id,
+                                lines: vec![
+                                    "[docker] Engine disconnected; cannot list images".to_string(),
                                     String::new(),
                                 ],
                             })
