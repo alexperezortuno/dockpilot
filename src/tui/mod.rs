@@ -79,6 +79,15 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
         return;
     }
 
+    if matches!(app.current_tab, Tab::Image) {
+        draw_image_tab(f, app, chunks[1]);
+        draw_output(f, app, chunks[2]);
+        if let Some(area) = input_area {
+            draw_input(f, app, area);
+        }
+        return;
+    }
+
     if matches!(app.current_tab, Tab::Container) {
         draw_container_tab(f, app, chunks[1]);
         draw_output(f, app, chunks[2]);
@@ -291,6 +300,65 @@ fn draw_dashboard(f: &mut Frame, app: &App, area: Rect) {
     let widget =
         Paragraph::new(text).block(Block::default().borders(Borders::ALL).title("Dashboard"));
     f.render_widget(widget, area);
+}
+
+fn draw_image_tab(f: &mut Frame, app: &mut App, area: Rect) {
+    let panes = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(72), Constraint::Percentage(28)])
+        .split(area);
+    let rows = app.images.iter().map(|image| {
+        Row::new([
+            Cell::from(image.id.clone()),
+            Cell::from(image.tag.clone()),
+            Cell::from(format!("{} MB", image.size / 1_048_576)),
+        ])
+    });
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(14),
+            Constraint::Min(24),
+            Constraint::Length(12),
+        ],
+    )
+    .header(Row::new(["ID", "Tag", "Size"]))
+    .block(Block::default().borders(Borders::ALL).title("Images"))
+    .row_highlight_style(
+        Style::default()
+            .bg(Color::Blue)
+            .add_modifier(Modifier::BOLD),
+    )
+    .highlight_symbol(">> ");
+    f.render_stateful_widget(table, panes[0], &mut app.image_table_state);
+
+    let items = app.image_actions.iter().map(|action| {
+        let label = match action {
+            ImageAction::Build => "Build Image",
+            ImageAction::Rebuild => "Rebuild Image (no-cache)",
+            ImageAction::List => "Refresh Images",
+            ImageAction::Remove => "Remove Image",
+            ImageAction::Push => "Push Image",
+            ImageAction::Pull => "Pull Image",
+            ImageAction::Save => "Save Image to tar",
+            ImageAction::Load => "Load Image from tar",
+            ImageAction::History => "View Image History",
+        };
+        ListItem::new(label)
+    });
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Image Actions"),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(Color::Blue)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol(">> ");
+    f.render_stateful_widget(list, panes[1], &mut app.image_list_state);
 }
 
 fn draw_container_tab(f: &mut Frame, app: &mut App, area: Rect) {
