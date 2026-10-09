@@ -8,7 +8,7 @@ use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Tabs},
+    widgets::{Block, Borders, Cell, List, ListItem, ListState, Paragraph, Row, Table, Tabs},
 };
 
 pub fn draw_app(f: &mut Frame, app: &mut App) {
@@ -70,6 +70,15 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
         );
 
     f.render_widget(tabs, chunks[0]);
+
+    if matches!(app.current_tab, Tab::Container) {
+        draw_container_tab(f, app, chunks[1]);
+        draw_output(f, app, chunks[2]);
+        if let Some(area) = input_area {
+            draw_input(f, app, area);
+        }
+        return;
+    }
 
     // List of actions
     let (items, title, state): (Vec<ListItem>, &str, &mut ListState) = match app.current_tab {
@@ -190,6 +199,10 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
                 "  Up/Down         - Navigate actions",
                 "  Enter           - Execute / prompt for parameter",
                 "  x               - Cancel active task",
+                "  r               - Refresh containers",
+                "  f               - Filter containers",
+                "  m               - Toggle table/actions focus",
+                "  s               - Cycle container sort",
                 "  q / Esc         - Exit",
                 "",
                 "Input mode:",
@@ -228,6 +241,86 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
     if let Some(area) = input_area {
         draw_input(f, app, area);
     }
+}
+
+fn draw_container_tab(f: &mut Frame, app: &mut App, area: Rect) {
+    let panes = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(72), Constraint::Percentage(28)])
+        .split(area);
+    let containers = app.filtered_containers();
+    let rows = containers.iter().map(|container| {
+        Row::new([
+            Cell::from(container.id.chars().take(12).collect::<String>()),
+            Cell::from(container.name.clone()),
+            Cell::from(container.image.clone()),
+            Cell::from(container.state.clone()),
+            Cell::from(container.status.clone()),
+        ])
+    });
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(12),
+            Constraint::Min(16),
+            Constraint::Min(16),
+            Constraint::Length(12),
+            Constraint::Min(20),
+        ],
+    )
+    .header(Row::new(["ID", "Name", "Image", "State", "Status"]))
+    .block(Block::default().borders(Borders::ALL).title(format!(
+        " Containers ({}) | filter: {} | focus: {} ",
+        containers.len(),
+        if app.container_filter.is_empty() {
+            "none"
+        } else {
+            &app.container_filter
+        },
+        if app.container_table_focus {
+            "table"
+        } else {
+            "actions"
+        }
+    )))
+    .row_highlight_style(
+        Style::default()
+            .bg(Color::Blue)
+            .add_modifier(Modifier::BOLD),
+    )
+    .highlight_symbol(">> ");
+    f.render_stateful_widget(table, panes[0], &mut app.container_table_state);
+
+    let items = app.container_actions.iter().map(|action| {
+        let label = match action {
+            ContainerAction::Start => "Start Containers",
+            ContainerAction::StopAll => "Stop all Containers",
+            ContainerAction::Stop => "Stop Containers",
+            ContainerAction::ListAll => "List All Containers",
+            ContainerAction::List => "List Containers",
+            ContainerAction::Logs => "View Container Logs",
+            ContainerAction::Create => "Create Container",
+            ContainerAction::Remove => "Remove Container",
+            ContainerAction::Top => "View Container Top",
+            ContainerAction::Diff => "View Container Diff",
+            ContainerAction::Pause => "Pause Container",
+            ContainerAction::Unpause => "Unpause Container",
+            ContainerAction::Update => "Update Container",
+            ContainerAction::Wait => "Wait for Container",
+        };
+        ListItem::new(label)
+    });
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title("Actions"))
+        .highlight_style(
+            Style::default()
+                .bg(Color::Blue)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol(">> ");
+    let mut action_state = std::mem::take(&mut app.container_list_state);
+    f.render_stateful_widget(list, panes[1], &mut action_state);
+    app.container_list_state = action_state;
 }
 
 fn draw_output(f: &mut Frame, app: &mut App, area: Rect) {
