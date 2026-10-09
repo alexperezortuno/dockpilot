@@ -1,3 +1,4 @@
+use crate::docker::CommandSpec;
 use ratatui::widgets::ListState;
 
 #[derive(Debug, Clone)]
@@ -340,82 +341,140 @@ impl App {
         match action {
             // Container
             PendingAction::ContainerLogs => {
-                self.execute_command(&format!("docker logs --tail 100 {}", value));
+                self.execute_command(
+                    CommandSpec::new("docker")
+                        .args(["logs", "--tail", "100"])
+                        .arg(value),
+                );
             }
             PendingAction::ContainerTop => {
-                self.execute_command(&format!("docker container top {}", value));
+                self.execute_command(
+                    CommandSpec::new("docker")
+                        .args(["container", "top"])
+                        .arg(value),
+                );
             }
             PendingAction::ContainerDiff => {
-                self.execute_command(&format!("docker container diff {}", value));
+                self.execute_command(
+                    CommandSpec::new("docker")
+                        .args(["container", "diff"])
+                        .arg(value),
+                );
             }
             PendingAction::ContainerPause => {
-                self.execute_command(&format!("docker container pause {}", value));
+                self.execute_command(
+                    CommandSpec::new("docker")
+                        .args(["container", "pause"])
+                        .arg(value),
+                );
             }
             PendingAction::ContainerUnpause => {
-                self.execute_command(&format!("docker container unpause {}", value));
+                self.execute_command(
+                    CommandSpec::new("docker")
+                        .args(["container", "unpause"])
+                        .arg(value),
+                );
             }
             PendingAction::ContainerUpdate => {
-                self.execute_command(&format!("docker container update --memory=512m {}", value));
+                self.execute_command(
+                    CommandSpec::new("docker")
+                        .args(["container", "update", "--memory=512m"])
+                        .arg(value),
+                );
             }
             PendingAction::ContainerWait => {
-                self.execute_command(&format!("docker container wait {}", value));
+                self.execute_command(
+                    CommandSpec::new("docker")
+                        .args(["container", "wait"])
+                        .arg(value),
+                );
             }
             PendingAction::ContainerRemove => {
-                self.execute_command(&format!("docker rm -f {}", value));
+                self.execute_command(CommandSpec::new("docker").args(["rm", "-f"]).arg(value));
             }
             PendingAction::ContainerCreate => {
                 // value = "image name" e.g. "test nginx"
                 let mut parts = value.splitn(2, ' ');
                 let name = parts.next().unwrap_or("test");
                 let image = parts.next().unwrap_or("nginx");
-                self.execute_command(&format!("docker run -d --name={} -p 83:83 {}", name, image));
+                self.execute_command(
+                    CommandSpec::new("docker")
+                        .args(["run", "-d"])
+                        .arg("--name")
+                        .arg(name)
+                        .args(["-p", "83:83"])
+                        .arg(image),
+                );
             }
             // Image
             PendingAction::ImageRemove => {
-                self.execute_command(&format!("docker rmi {}", value));
+                self.execute_command(CommandSpec::new("docker").args(["rmi"]).arg(value));
             }
             PendingAction::ImagePush => {
-                self.execute_command(&format!("docker push {}", value));
+                self.execute_command(CommandSpec::new("docker").args(["push"]).arg(value));
             }
             PendingAction::ImagePull => {
-                self.execute_command(&format!("docker pull {}", value));
+                self.execute_command(CommandSpec::new("docker").args(["pull"]).arg(value));
             }
             PendingAction::ImageSave => {
-                self.execute_command(&format!("docker save {} > image.tar", value));
+                self.execute_command(
+                    CommandSpec::new("docker")
+                        .args(["save"])
+                        .arg(value)
+                        .stdout_file("image.tar"),
+                );
             }
             PendingAction::ImageLoad => {
                 // value = path to the tar file, defaults to image.tar
-                self.execute_command(&format!("docker load < {}", value));
+                self.execute_command(CommandSpec::new("docker").args(["load"]).stdin_file(value));
             }
             PendingAction::ImageHistory => {
-                self.execute_command(&format!("docker history {}", value));
+                self.execute_command(CommandSpec::new("docker").args(["history"]).arg(value));
             }
             PendingAction::ImageBuild => {
                 // value = "tag context"  p.ej. "myimage ."
                 let mut parts = value.splitn(2, ' ');
                 let tag = parts.next().unwrap_or("myimage");
                 let ctx = parts.next().unwrap_or(".");
-                self.execute_command(&format!("docker build -t {} {}", tag, ctx));
+                self.execute_command(CommandSpec::new("docker").args(["build", "-t", tag, ctx]));
             }
             PendingAction::ImageRebuild => {
                 let mut parts = value.splitn(2, ' ');
                 let tag = parts.next().unwrap_or("myimage");
                 let ctx = parts.next().unwrap_or(".");
-                self.execute_command(&format!("docker build --no-cache -t {} {}", tag, ctx));
+                self.execute_command(CommandSpec::new("docker").args([
+                    "build",
+                    "--no-cache",
+                    "-t",
+                    tag,
+                    ctx,
+                ]));
             }
             // Network
             PendingAction::NetworkCreate => {
-                self.execute_command(&format!("docker network create {}", value));
+                self.execute_command(
+                    CommandSpec::new("docker")
+                        .args(["network", "create"])
+                        .arg(value),
+                );
             }
             PendingAction::NetworkRemove => {
-                self.execute_command(&format!("docker network rm {}", value));
+                self.execute_command(
+                    CommandSpec::new("docker")
+                        .args(["network", "rm"])
+                        .arg(value),
+                );
             }
             // Volume
             PendingAction::VolumeCreate => {
-                self.execute_command(&format!("docker volume create {}", value));
+                self.execute_command(
+                    CommandSpec::new("docker")
+                        .args(["volume", "create"])
+                        .arg(value),
+                );
             }
             PendingAction::VolumeRemove => {
-                self.execute_command(&format!("docker volume rm {}", value));
+                self.execute_command(CommandSpec::new("docker").args(["volume", "rm"]).arg(value));
             }
             // Project
             PendingAction::ProjectSetFolder => {
@@ -423,24 +482,37 @@ impl App {
                 let folder = self.project_folder.clone();
                 self.output_lines
                     .push(format!("[proyecto] carpeta establecida: {}", folder));
-                self.execute_command(&format!("ls -la {}", folder));
+                self.execute_command(CommandSpec::new("ls").args(["-la"]).arg(folder));
             }
         }
     }
 
     // --- Command executions ---
-    fn execute_command(&mut self, command: &str) {
+    fn execute_command(&mut self, command: CommandSpec) {
         crate::docker::execute_command(&mut self.output_lines, &mut self.output_scroll, command);
+    }
+
+    fn execute_compose(&mut self, args: &[&str]) {
+        let project_folder = self.project_folder.clone();
+        self.execute_command(
+            CommandSpec::new("docker")
+                .args(args)
+                .current_dir(project_folder),
+        );
     }
 
     // --- Tab actions ---
     fn run_container_action(&mut self, action: &ContainerAction) {
         match action {
-            ContainerAction::Start => self.execute_command("docker compose up -d"),
-            ContainerAction::StopAll => self.execute_command("docker stop $(docker ps -aq)"),
-            ContainerAction::Stop => self.execute_command("docker compose stop"),
-            ContainerAction::ListAll => self.execute_command("docker ps -a"),
-            ContainerAction::List => self.execute_command("docker ps"),
+            ContainerAction::Start => self.execute_compose(&["compose", "up", "-d"]),
+            ContainerAction::StopAll => {
+                crate::docker::stop_all(&mut self.output_lines, &mut self.output_scroll)
+            }
+            ContainerAction::Stop => self.execute_compose(&["compose", "stop"]),
+            ContainerAction::ListAll => {
+                self.execute_command(CommandSpec::new("docker").args(["ps", "-a"]))
+            }
+            ContainerAction::List => self.execute_command(CommandSpec::new("docker").args(["ps"])),
             ContainerAction::Logs => {
                 self.start_input("Contenedor para ver logs:", PendingAction::ContainerLogs);
             }
@@ -488,7 +560,9 @@ impl App {
                     PendingAction::ImageRebuild,
                 );
             }
-            ImageAction::List => self.execute_command("docker image list"),
+            ImageAction::List => {
+                self.execute_command(CommandSpec::new("docker").args(["image", "list"]))
+            }
             ImageAction::Remove => {
                 self.start_input(
                     "Imagen a eliminar (ID o nombre):",
@@ -515,7 +589,9 @@ impl App {
 
     fn run_network_action(&mut self, action: &NetworkAction) {
         match action {
-            NetworkAction::List => self.execute_command("docker network ls"),
+            NetworkAction::List => {
+                self.execute_command(CommandSpec::new("docker").args(["network", "ls"]))
+            }
             NetworkAction::Create => {
                 self.start_input("Nombre de la nueva red:", PendingAction::NetworkCreate);
             }
@@ -527,7 +603,9 @@ impl App {
 
     fn run_volume_action(&mut self, action: &VolumeAction) {
         match action {
-            VolumeAction::List => self.execute_command("docker volume ls"),
+            VolumeAction::List => {
+                self.execute_command(CommandSpec::new("docker").args(["volume", "ls"]))
+            }
             VolumeAction::Create => {
                 self.start_input("Nombre del nuevo volumen:", PendingAction::VolumeCreate);
             }
@@ -553,12 +631,21 @@ impl App {
 
     fn run_machine_action(&mut self, action: &MachineAction) {
         match action {
-            MachineAction::List => self.execute_command("docker-machine ls"),
-            MachineAction::Start => self.execute_command("docker-machine start default"),
-            MachineAction::Stop => self.execute_command("docker-machine stop default"),
-            MachineAction::Env => self.execute_command("docker-machine env default"),
-            MachineAction::Eval => self.execute_command("eval $(docker-machine env default)"),
-            MachineAction::Ip => self.execute_command("docker-machine ip default"),
+            MachineAction::List => {
+                self.execute_command(CommandSpec::new("docker-machine").args(["ls"]))
+            }
+            MachineAction::Start => {
+                self.execute_command(CommandSpec::new("docker-machine").args(["start", "default"]))
+            }
+            MachineAction::Stop => {
+                self.execute_command(CommandSpec::new("docker-machine").args(["stop", "default"]))
+            }
+            MachineAction::Env | MachineAction::Eval => {
+                self.execute_command(CommandSpec::new("docker-machine").args(["env", "default"]));
+            }
+            MachineAction::Ip => {
+                self.execute_command(CommandSpec::new("docker-machine").args(["ip", "default"]))
+            }
         }
     }
 
