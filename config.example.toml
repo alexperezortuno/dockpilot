@@ -17,6 +17,7 @@ theme = "t"
 
 # TUI event polling interval. Valid range: 10..=5000 milliseconds.
 poll_interval_ms = 50
+output_capacity = 2000
 
 # Policy defaults consumed by later safety-policy work.
 safe_mode = true
