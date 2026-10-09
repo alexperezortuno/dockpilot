@@ -74,7 +74,7 @@ fn failed_result(display: &str, error: io::Error) -> CommandResult {
     CommandResult {
         lines: vec![
             format!("$ {}", display),
-            format!("[error ejecutando comando: {}]", error),
+            format!("[Error executing command: {}]", error),
             String::new(),
         ],
         stdout: Vec::new(),
