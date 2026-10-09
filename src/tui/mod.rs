@@ -252,6 +252,9 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
                 "  Up/Down         - Navigate actions",
                 "  Enter           - Execute / prompt for parameter",
                 "  x               - Cancel active task",
+                "  c               - Clear general output",
+                "  PageUp/PageDown - Scroll output",
+                "  Home/End        - Output start/end",
                 "  r               - Refresh containers",
                 "  f               - Filter current table",
                 "  m               - Toggle table/actions focus",
@@ -629,7 +632,8 @@ fn draw_output(f: &mut Frame, app: &mut App, area: Rect) {
         app.output_lines.iter().cloned().collect()
     };
     let total = lines.len();
-    let start = total.saturating_sub(visible_height);
+    let max_start = total.saturating_sub(visible_height);
+    let start = app.output_scroll.min(max_start);
 
     let items: Vec<ListItem> = lines
         .iter()
