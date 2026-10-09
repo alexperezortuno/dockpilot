@@ -1,4 +1,6 @@
+use bollard::query_parameters::StatsOptionsBuilder;
 use bollard::{Docker, query_parameters::ListContainersOptionsBuilder};
+use futures_util::StreamExt;
 use std::fmt;
 use tokio::time::{Duration, timeout};
 
@@ -35,6 +37,24 @@ pub struct ContainerRow {
     pub image: String,
     pub state: String,
     pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContainerStats {
+    pub id: String,
+    pub cpu_percent: f64,
+    pub memory_usage: u64,
+    pub memory_limit: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DashboardData {
+    pub engine_version: String,
+    pub containers_total: i64,
+    pub containers_running: i64,
+    pub containers_paused: i64,
+    pub containers_stopped: i64,
+    pub selected_stats: Option<ContainerStats>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -151,6 +171,79 @@ pub async fn apply_container_lifecycle(
             ]
         })
         .map_err(|error| error.to_string())
+}
+
+pub async fn dashboard_data(
+    client: &Docker,
+    selected_id: Option<&str>,
+) -> Result<DashboardData, String> {
+    let info = client.info().await.map_err(|error| error.to_string())?;
+    let selected_stats = if let Some(id) = selected_id {
+        let options = StatsOptionsBuilder::new()
+            .stream(false)
+            .one_shot(true)
+            .build();
+        let mut stream = client.stats(id, Some(options));
+        match stream.next().await {
+            Some(Ok(stats)) => {
+                let cpu_total = stats
+                    .cpu_stats
+                    .as_ref()
+                    .and_then(|stats| stats.cpu_usage.as_ref())
+                    .and_then(|usage| usage.total_usage)
+                    .unwrap_or(0);
+                let pre_cpu_total = stats
+                    .precpu_stats
+                    .as_ref()
+                    .and_then(|stats| stats.cpu_usage.as_ref())
+                    .and_then(|usage| usage.total_usage)
+                    .unwrap_or(0);
+                let system_total = stats
+                    .cpu_stats
+                    .as_ref()
+                    .and_then(|stats| stats.system_cpu_usage)
+                    .unwrap_or(0);
+                let pre_system_total = stats
+                    .precpu_stats
+                    .as_ref()
+                    .and_then(|stats| stats.system_cpu_usage)
+                    .unwrap_or(0);
+                let online_cpus = stats
+                    .cpu_stats
+                    .as_ref()
+                    .and_then(|stats| stats.online_cpus)
+                    .unwrap_or(1);
+                let cpu_percent = if system_total > pre_system_total {
+                    (cpu_total.saturating_sub(pre_cpu_total) as f64
+                        / (system_total - pre_system_total) as f64)
+                        * online_cpus as f64
+                        * 100.0
+                } else {
+                    0.0
+                };
+                let memory = stats.memory_stats.unwrap_or_default();
+                Some(ContainerStats {
+                    id: id.to_string(),
+                    cpu_percent,
+                    memory_usage: memory.usage.unwrap_or(0),
+                    memory_limit: memory.limit.unwrap_or(0),
+                })
+            }
+            Some(Err(error)) => return Err(error.to_string()),
+            None => None,
+        }
+    } else {
+        None
+    };
+
+    Ok(DashboardData {
+        engine_version: info.server_version.unwrap_or_else(|| "unknown".to_string()),
+        containers_total: info.containers.unwrap_or(0),
+        containers_running: info.containers_running.unwrap_or(0),
+        containers_paused: info.containers_paused.unwrap_or(0),
+        containers_stopped: info.containers_stopped.unwrap_or(0),
+        selected_stats,
+    })
 }
 
 impl EngineConnection {
