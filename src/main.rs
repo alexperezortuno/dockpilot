@@ -54,10 +54,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let engine_connection = EngineConnection::connect().await;
     let engine_status = engine_connection.status_message();
     let engine_status_display = engine_connection.status().to_string();
-    let _engine_client = engine_connection.into_client();
+    let engine_client = engine_connection.into_client();
     app.set_engine_status(engine_status);
     app.push_output(format!("[docker] {}", engine_status_display));
     let mut task_manager = TaskManager::new(32);
+    task_manager.set_client(engine_client);
+    if task_manager.has_client() {
+        task_manager.spawn(TaskRequest::ListContainers);
+    }
     let poll_interval = Duration::from_millis(config.poll_interval_ms);
     let mut pending_confirmation: Option<TaskRequest> = None;
     let mut should_quit = false;
@@ -73,6 +77,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 TaskEvent::Finished { id, lines } => {
                     app.append_output(lines);
+                    task_manager.complete(id);
+                }
+                TaskEvent::Containers { id, containers } => {
+                    let count = containers.len();
+                    app.set_containers(containers);
+                    app.push_output(format!("[docker] loaded {} containers", count));
                     task_manager.complete(id);
                 }
             }
@@ -139,6 +149,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if task_manager.cancel() {
                                 app.push_output("[tarea cancelada]");
                             }
+                            None
+                        }
+                        (KeyCode::Char('r'), _) => Some(TaskRequest::ListContainers),
+                        (KeyCode::Char('f'), _) => {
+                            app.start_container_filter();
+                            None
+                        }
+                        (KeyCode::Char('m'), _) => {
+                            app.toggle_container_focus();
+                            None
+                        }
+                        (KeyCode::Char('s'), _) => {
+                            app.toggle_container_sort();
                             None
                         }
                         (KeyCode::Tab, _) => {
