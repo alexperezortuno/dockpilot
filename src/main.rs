@@ -104,14 +104,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     app.set_images(images);
                     app.push_output(format!("[docker] loaded {} images", count));
                     task_manager.complete(id);
+                    if task_manager.has_client() {
+                        task_manager.spawn(TaskRequest::ListNetworks);
+                    }
                 }
                 TaskEvent::Networks { id, networks } => {
                     app.set_networks(networks);
                     task_manager.complete(id);
+                    if task_manager.has_client() {
+                        task_manager.spawn(TaskRequest::ListVolumes);
+                    }
                 }
                 TaskEvent::Volumes { id, volumes } => {
                     app.set_volumes(volumes);
                     task_manager.complete(id);
+                }
+                TaskEvent::EventLine { line, alert } => {
+                    app.push_event(line, alert);
                 }
             }
         }
@@ -186,8 +195,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         (KeyCode::Char('i'), _) => Some(TaskRequest::ListImages),
                         (KeyCode::Char('n'), _) => Some(TaskRequest::ListNetworks),
                         (KeyCode::Char('v'), _) => Some(TaskRequest::ListVolumes),
+                        (KeyCode::Char('e'), _) => Some(TaskRequest::Events),
+                        (KeyCode::Char('u'), _) => Some(TaskRequest::DiskUsage { preview: false }),
+                        (KeyCode::Char('k'), _) => Some(TaskRequest::DiskUsage { preview: true }),
                         (KeyCode::Char('f'), _) => {
-                            app.start_container_filter();
+                            app.start_filter();
                             None
                         }
                         (KeyCode::Char(key), _) if key == shortcuts.toggle_focus => {

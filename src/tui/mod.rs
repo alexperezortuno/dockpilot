@@ -115,14 +115,20 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
     }
 
     if matches!(app.current_tab, Tab::Network) {
-        draw_network_tab(f, app, chunks[1]);
+        draw_network_tab(f, app, chunks[1], colors);
         draw_output(f, app, chunks[2]);
+        if let Some(area) = input_area {
+            draw_input(f, app, area);
+        }
         return;
     }
 
     if matches!(app.current_tab, Tab::Volume) {
-        draw_volume_tab(f, app, chunks[1]);
+        draw_volume_tab(f, app, chunks[1], colors);
         draw_output(f, app, chunks[2]);
+        if let Some(area) = input_area {
+            draw_input(f, app, area);
+        }
         return;
     }
 
@@ -211,6 +217,8 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
                         VolumeAction::List => "List Volumes",
                         VolumeAction::Create => "Create Volume",
                         VolumeAction::Remove => "Remove Volume",
+                        VolumeAction::Backup => "Backup Volume",
+                        VolumeAction::Restore => "Restore Volume",
                     };
                     ListItem::new(s)
                 })
@@ -244,11 +252,15 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
                 "  Enter           - Execute / prompt for parameter",
                 "  x               - Cancel active task",
                 "  r               - Refresh containers",
-                "  f               - Filter containers",
+                "  f               - Filter current table",
                 "  m               - Toggle table/actions focus",
                 "  s               - Cycle container sort",
                 "  p               - Pause/resume log display",
                 "  /               - Filter log lines",
+                "  Empty filter + Enter - Clear filter",
+                "  e               - Start Docker event stream",
+                "  u               - Show disk usage",
+                "  k               - Preview cleanup",
                 "  q / Esc         - Exit",
                 "",
                 "Input mode:",
@@ -327,7 +339,8 @@ fn draw_image_tab(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(72), Constraint::Percentage(28)])
         .split(area);
-    let rows = app.images.iter().map(|image| {
+    let images = app.filtered_images();
+    let rows = images.iter().map(|image| {
         Row::new([
             Cell::from(image.id.clone()),
             Cell::from(image.tag.clone()),
@@ -344,7 +357,13 @@ fn draw_image_tab(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
     )
     .header(Row::new(["ID", "Tag", "Size"]))
     .block(Block::default().borders(Borders::ALL).title(format!(
-        " Images | focus: {} ",
+        " Images ({}) | filter: {} | focus: {} ",
+        images.len(),
+        if app.image_filter.is_empty() {
+            "none"
+        } else {
+            &app.image_filter
+        },
         if app.image_table_focus {
             "table"
         } else {
@@ -388,12 +407,13 @@ fn draw_image_tab(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
     f.render_stateful_widget(list, panes[1], &mut app.image_list_state);
 }
 
-fn draw_network_tab(f: &mut Frame, app: &mut App, area: Rect) {
+fn draw_network_tab(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
     let panes = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(72), Constraint::Percentage(28)])
         .split(area);
-    let rows = app.networks.iter().map(|network| {
+    let networks = app.filtered_networks();
+    let rows = networks.iter().map(|network| {
         Row::new([
             network.id.clone(),
             network.name.clone(),
@@ -411,7 +431,26 @@ fn draw_network_tab(f: &mut Frame, app: &mut App, area: Rect) {
         ],
     )
     .header(Row::new(["ID", "Name", "Driver", "Scope"]))
-    .block(Block::default().borders(Borders::ALL).title("Networks"));
+    .block(Block::default().borders(Borders::ALL).title(format!(
+        " Networks ({}) | filter: {} | focus: {} ",
+        networks.len(),
+        if app.network_filter.is_empty() {
+            "none"
+        } else {
+            &app.network_filter
+        },
+        if app.network_table_focus {
+            "table"
+        } else {
+            "actions"
+        }
+    )))
+    .row_highlight_style(
+        Style::default()
+            .bg(colors.selection)
+            .add_modifier(Modifier::BOLD),
+    )
+    .highlight_symbol(">> ");
     f.render_stateful_widget(table, panes[0], &mut app.network_table_state);
     let items = app.network_actions.iter().map(|action| {
         ListItem::new(match action {
@@ -420,16 +459,24 @@ fn draw_network_tab(f: &mut Frame, app: &mut App, area: Rect) {
             NetworkAction::Remove => "Remove Network",
         })
     });
-    let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Actions"));
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title("Actions"))
+        .highlight_style(
+            Style::default()
+                .bg(colors.selection)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol(">> ");
     f.render_stateful_widget(list, panes[1], &mut app.network_list_state);
 }
 
-fn draw_volume_tab(f: &mut Frame, app: &mut App, area: Rect) {
+fn draw_volume_tab(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
     let panes = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(72), Constraint::Percentage(28)])
         .split(area);
-    let rows = app.volumes.iter().map(|volume| {
+    let volumes = app.filtered_volumes();
+    let rows = volumes.iter().map(|volume| {
         Row::new([
             volume.name.clone(),
             volume.driver.clone(),
@@ -445,16 +492,44 @@ fn draw_volume_tab(f: &mut Frame, app: &mut App, area: Rect) {
         ],
     )
     .header(Row::new(["Name", "Driver", "Mountpoint"]))
-    .block(Block::default().borders(Borders::ALL).title("Volumes"));
+    .block(Block::default().borders(Borders::ALL).title(format!(
+        " Volumes ({}) | filter: {} | focus: {} ",
+        volumes.len(),
+        if app.volume_filter.is_empty() {
+            "none"
+        } else {
+            &app.volume_filter
+        },
+        if app.volume_table_focus {
+            "table"
+        } else {
+            "actions"
+        }
+    )))
+    .row_highlight_style(
+        Style::default()
+            .bg(colors.selection)
+            .add_modifier(Modifier::BOLD),
+    )
+    .highlight_symbol(">> ");
     f.render_stateful_widget(table, panes[0], &mut app.volume_table_state);
     let items = app.volume_actions.iter().map(|action| {
         ListItem::new(match action {
             VolumeAction::List => "Refresh Volumes",
             VolumeAction::Create => "Create Volume",
             VolumeAction::Remove => "Remove Volume",
+            VolumeAction::Backup => "Backup Volume",
+            VolumeAction::Restore => "Restore Volume",
         })
     });
-    let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Actions"));
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title("Actions"))
+        .highlight_style(
+            Style::default()
+                .bg(colors.selection)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol(">> ");
     f.render_stateful_widget(list, panes[1], &mut app.volume_list_state);
 }
 
@@ -543,8 +618,11 @@ fn draw_container_tab(f: &mut Frame, app: &mut App, area: Rect, colors: Palette)
 fn draw_output(f: &mut Frame, app: &mut App, area: Rect) {
     let visible_height = area.height.saturating_sub(2) as usize;
     let showing_logs = !app.log_lines.is_empty();
+    let showing_events = !showing_logs && !app.event_lines.is_empty();
     let lines = if showing_logs {
         app.filtered_log_lines()
+    } else if showing_events {
+        app.event_lines.iter().cloned().collect()
     } else {
         app.output_lines.iter().cloned().collect()
     };
@@ -564,6 +642,8 @@ fn draw_output(f: &mut Frame, app: &mut App, area: Rect) {
                 total,
                 if app.logs_paused { ", paused" } else { "" }
             )
+        } else if showing_events {
+            format!(" Events ({} lines, {} alerts) ", total, app.alerts.len())
         } else {
             format!(" Output ({} lines) ", total)
         },

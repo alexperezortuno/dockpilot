@@ -16,6 +16,8 @@ mod navigation;
 mod output;
 
 const MAX_LOG_LINES: usize = 2_000;
+const MAX_EVENT_LINES: usize = 500;
+const MAX_ALERTS: usize = 100;
 
 #[derive(Debug, Clone)]
 pub enum ContainerAction {
@@ -62,6 +64,8 @@ pub enum VolumeAction {
     List,
     Create,
     Remove,
+    Backup,
+    Restore,
 }
 
 #[derive(Debug, Clone)]
@@ -107,6 +111,9 @@ pub enum PendingAction {
     ContainerRemove,
     ContainerCreate,
     ContainerFilter,
+    ImageFilter,
+    NetworkFilter,
+    VolumeFilter,
     ContainerRestart,
     LogFilter,
     // Image
@@ -124,6 +131,8 @@ pub enum PendingAction {
     // Volume
     VolumeCreate,
     VolumeRemove,
+    VolumeBackup,
+    VolumeRestore,
     // Project
     ProjectSetFolder,
     ComposeProfileUp,
@@ -134,14 +143,19 @@ pub struct App {
     pub(crate) container_actions: Vec<ContainerAction>,
     pub(crate) image_actions: Vec<ImageAction>,
     pub(crate) images: Vec<ImageRow>,
+    pub(crate) image_filter: String,
     pub(crate) image_table_state: ratatui::widgets::TableState,
     pub(crate) image_table_focus: bool,
     pub(crate) network_actions: Vec<NetworkAction>,
     pub(crate) networks: Vec<NetworkRow>,
+    pub(crate) network_filter: String,
     pub(crate) network_table_state: ratatui::widgets::TableState,
+    pub(crate) network_table_focus: bool,
     pub(crate) volume_actions: Vec<VolumeAction>,
     pub(crate) volumes: Vec<VolumeRow>,
+    pub(crate) volume_filter: String,
     pub(crate) volume_table_state: ratatui::widgets::TableState,
+    pub(crate) volume_table_focus: bool,
     pub(crate) project_actions: Vec<ProjectAction>,
     pub(crate) output_lines: VecDeque<String>,
     pub(crate) output_capacity: usize,
@@ -158,6 +172,8 @@ pub struct App {
     pub(crate) log_lines: VecDeque<String>,
     pub(crate) log_filter: String,
     pub(crate) logs_paused: bool,
+    pub(crate) event_lines: VecDeque<String>,
+    pub(crate) alerts: VecDeque<String>,
     pub(crate) containers: Vec<ContainerRow>,
     pub(crate) container_table_state: ratatui::widgets::TableState,
     pub(crate) container_table_focus: bool,
@@ -211,6 +227,7 @@ impl App {
                 ImageAction::History,
             ],
             images: Vec::new(),
+            image_filter: String::new(),
             image_table_state: ratatui::widgets::TableState::default(),
             image_table_focus: false,
             network_actions: vec![
@@ -219,14 +236,20 @@ impl App {
                 NetworkAction::Remove,
             ],
             networks: Vec::new(),
+            network_filter: String::new(),
             network_table_state: ratatui::widgets::TableState::default(),
+            network_table_focus: false,
             volume_actions: vec![
                 VolumeAction::List,
                 VolumeAction::Create,
                 VolumeAction::Remove,
+                VolumeAction::Backup,
+                VolumeAction::Restore,
             ],
             volumes: Vec::new(),
+            volume_filter: String::new(),
             volume_table_state: ratatui::widgets::TableState::default(),
+            volume_table_focus: false,
             project_actions: vec![
                 ProjectAction::SetFolder,
                 ProjectAction::ComposeUp,
@@ -249,6 +272,8 @@ impl App {
             log_lines: VecDeque::new(),
             log_filter: String::new(),
             logs_paused: false,
+            event_lines: VecDeque::new(),
+            alerts: VecDeque::new(),
             containers: Vec::new(),
             container_table_state: ratatui::widgets::TableState::default(),
             container_table_focus: true,
@@ -260,7 +285,7 @@ impl App {
             pending_action: None,
         };
 
-        app.container_list_state.select(Some(1));
+        app.container_list_state.select(Some(0));
         app.image_list_state.select(Some(0));
         app.network_list_state.select(Some(0));
         app.volume_list_state.select(Some(0));
@@ -328,6 +353,8 @@ impl App {
         match self.current_tab {
             Tab::Container => self.toggle_container_focus(),
             Tab::Image => self.image_table_focus = !self.image_table_focus,
+            Tab::Network => self.network_table_focus = !self.network_table_focus,
+            Tab::Volume => self.volume_table_focus = !self.volume_table_focus,
             _ => {}
         }
     }
@@ -345,8 +372,27 @@ impl App {
         self.container_table_state.select(Some(0));
     }
 
+    #[cfg(test)]
     pub fn start_container_filter(&mut self) {
         self.start_input("Filtro de contenedores:", PendingAction::ContainerFilter);
+    }
+
+    pub fn start_filter(&mut self) {
+        match self.current_tab {
+            Tab::Container => {
+                self.start_input("Filtro de contenedores:", PendingAction::ContainerFilter);
+            }
+            Tab::Image => {
+                self.start_input("Filtro de imagenes:", PendingAction::ImageFilter);
+            }
+            Tab::Network => {
+                self.start_input("Filtro de redes:", PendingAction::NetworkFilter);
+            }
+            Tab::Volume => {
+                self.start_input("Filtro de volumenes:", PendingAction::VolumeFilter);
+            }
+            _ => {}
+        }
     }
 
     pub fn filtered_containers(&self) -> Vec<ContainerRow> {
@@ -374,6 +420,48 @@ impl App {
             ContainerSort::State => left.state.cmp(&right.state),
         });
         containers
+    }
+
+    pub fn filtered_images(&self) -> Vec<ImageRow> {
+        let filter = self.image_filter.to_lowercase();
+        self.images
+            .iter()
+            .filter(|image| {
+                filter.is_empty()
+                    || image.id.to_lowercase().contains(&filter)
+                    || image.tag.to_lowercase().contains(&filter)
+            })
+            .cloned()
+            .collect()
+    }
+
+    pub fn filtered_networks(&self) -> Vec<NetworkRow> {
+        let filter = self.network_filter.to_lowercase();
+        self.networks
+            .iter()
+            .filter(|network| {
+                filter.is_empty()
+                    || network.id.to_lowercase().contains(&filter)
+                    || network.name.to_lowercase().contains(&filter)
+                    || network.driver.to_lowercase().contains(&filter)
+                    || network.scope.to_lowercase().contains(&filter)
+            })
+            .cloned()
+            .collect()
+    }
+
+    pub fn filtered_volumes(&self) -> Vec<VolumeRow> {
+        let filter = self.volume_filter.to_lowercase();
+        self.volumes
+            .iter()
+            .filter(|volume| {
+                filter.is_empty()
+                    || volume.name.to_lowercase().contains(&filter)
+                    || volume.driver.to_lowercase().contains(&filter)
+                    || volume.mountpoint.to_lowercase().contains(&filter)
+            })
+            .cloned()
+            .collect()
     }
 
     pub fn set_engine_status(&mut self, status: impl Into<String>) {
@@ -424,6 +512,19 @@ impl App {
         self.logs_paused = !self.logs_paused;
     }
 
+    pub fn push_event(&mut self, line: String, alert: Option<String>) {
+        self.event_lines.push_back(line);
+        while self.event_lines.len() > MAX_EVENT_LINES {
+            self.event_lines.pop_front();
+        }
+        if let Some(alert) = alert {
+            self.alerts.push_back(alert);
+            while self.alerts.len() > MAX_ALERTS {
+                self.alerts.pop_front();
+            }
+        }
+    }
+
     pub fn start_log_filter(&mut self) {
         self.start_input("Filtro de logs:", PendingAction::LogFilter);
     }
@@ -470,16 +571,27 @@ impl App {
             }
             Tab::Image => {
                 if self.image_table_focus {
-                    Self::next_in_table(&mut self.image_table_state, self.images.len());
+                    let len = self.filtered_images().len();
+                    Self::next_in_table(&mut self.image_table_state, len);
                 } else {
                     Self::next_in_list(&mut self.image_list_state, self.image_actions.len());
                 }
             }
             Tab::Network => {
-                Self::next_in_list(&mut self.network_list_state, self.network_actions.len())
+                if self.network_table_focus {
+                    let len = self.filtered_networks().len();
+                    Self::next_in_table(&mut self.network_table_state, len);
+                } else {
+                    Self::next_in_list(&mut self.network_list_state, self.network_actions.len());
+                }
             }
             Tab::Volume => {
-                Self::next_in_list(&mut self.volume_list_state, self.volume_actions.len())
+                if self.volume_table_focus {
+                    let len = self.filtered_volumes().len();
+                    Self::next_in_table(&mut self.volume_table_state, len);
+                } else {
+                    Self::next_in_list(&mut self.volume_list_state, self.volume_actions.len());
+                }
             }
             Tab::Project => {
                 Self::next_in_list(&mut self.project_list_state, self.project_actions.len())
@@ -504,16 +616,30 @@ impl App {
             }
             Tab::Image => {
                 if self.image_table_focus {
-                    Self::previous_in_table(&mut self.image_table_state, self.images.len());
+                    let len = self.filtered_images().len();
+                    Self::previous_in_table(&mut self.image_table_state, len);
                 } else {
                     Self::previous_in_list(&mut self.image_list_state, self.image_actions.len());
                 }
             }
             Tab::Network => {
-                Self::previous_in_list(&mut self.network_list_state, self.network_actions.len())
+                if self.network_table_focus {
+                    let len = self.filtered_networks().len();
+                    Self::previous_in_table(&mut self.network_table_state, len);
+                } else {
+                    Self::previous_in_list(
+                        &mut self.network_list_state,
+                        self.network_actions.len(),
+                    );
+                }
             }
             Tab::Volume => {
-                Self::previous_in_list(&mut self.volume_list_state, self.volume_actions.len())
+                if self.volume_table_focus {
+                    let len = self.filtered_volumes().len();
+                    Self::previous_in_table(&mut self.volume_table_state, len);
+                } else {
+                    Self::previous_in_list(&mut self.volume_list_state, self.volume_actions.len());
+                }
             }
             Tab::Project => {
                 Self::previous_in_list(&mut self.project_list_state, self.project_actions.len())
@@ -569,7 +695,18 @@ impl App {
         self.input_buffer.clear();
         self.input_prompt.clear();
 
-        if value.is_empty() {
+        if value.is_empty()
+            && !matches!(
+                action.as_ref(),
+                Some(
+                    PendingAction::ContainerFilter
+                        | PendingAction::ImageFilter
+                        | PendingAction::NetworkFilter
+                        | PendingAction::VolumeFilter
+                        | PendingAction::LogFilter,
+                )
+            )
+        {
             self.push_output("[entrada cancelada: valor vacío]");
             return None;
         }
@@ -649,6 +786,21 @@ impl App {
                 self.container_table_state.select(Some(0));
                 None
             }
+            PendingAction::ImageFilter => {
+                self.image_filter = value.to_string();
+                self.image_table_state.select(Some(0));
+                None
+            }
+            PendingAction::NetworkFilter => {
+                self.network_filter = value.to_string();
+                self.network_table_state.select(Some(0));
+                None
+            }
+            PendingAction::VolumeFilter => {
+                self.volume_filter = value.to_string();
+                self.volume_table_state.select(Some(0));
+                None
+            }
             PendingAction::LogFilter => {
                 self.log_filter = value.to_string();
                 None
@@ -718,6 +870,8 @@ impl App {
             PendingAction::VolumeRemove => self.execute_destructive_command(
                 CommandSpec::new("docker").args(["volume", "rm"]).arg(value),
             ),
+            PendingAction::VolumeBackup => self.volume_archive_command(value, false),
+            PendingAction::VolumeRestore => self.volume_archive_command(value, true),
             // Project
             PendingAction::ProjectSetFolder => {
                 self.project_folder = value.to_string();
@@ -762,6 +916,46 @@ impl App {
             id: id.to_string(),
             operation,
         })
+    }
+
+    fn volume_archive_command(&mut self, value: &str, restore: bool) -> Option<TaskRequest> {
+        let Some((volume, archive)) = value.split_once('|') else {
+            self.push_output("[volume] use: volume|archive path");
+            return None;
+        };
+        let volume = volume.trim();
+        let archive = PathBuf::from(archive.trim());
+        let Some(filename) = archive.file_name().and_then(|name| name.to_str()) else {
+            self.push_output("[volume] archive path must include a filename");
+            return None;
+        };
+        let parent = archive
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
+        self.push_output("[warning] volume backup/restore may be inconsistent; stop writers first");
+        let volume_mount = format!("type=volume,source={},target=/volume", volume);
+        let backup_mount = format!(
+            "type=bind,source={},target=/backup",
+            parent.to_string_lossy()
+        );
+        let mut command = CommandSpec::new("docker")
+            .args(["run", "--rm", "--mount"])
+            .arg(volume_mount)
+            .args(["--mount"])
+            .arg(backup_mount)
+            .args(["alpine", "tar"]);
+        command = if restore {
+            command.args(["-xzf", &format!("/backup/{}", filename), "-C", "/volume"])
+        } else {
+            command.args([
+                "-czf",
+                &format!("/backup/{}", filename),
+                "-C",
+                "/volume",
+                ".",
+            ])
+        };
+        self.execute_mutating_command(command)
     }
 
     fn execute_compose(&mut self, args: &[&str]) -> Option<TaskRequest> {
@@ -891,6 +1085,14 @@ impl App {
                 "Nombre del volumen a eliminar:",
                 PendingAction::VolumeRemove,
             ),
+            VolumeAction::Backup => self.start_input(
+                "Volumen y archivo (volumen|ruta.tar.gz):",
+                PendingAction::VolumeBackup,
+            ),
+            VolumeAction::Restore => self.start_input(
+                "Volumen y archivo (volumen|ruta.tar.gz):",
+                PendingAction::VolumeRestore,
+            ),
         }
     }
 
@@ -933,8 +1135,9 @@ impl App {
             }
             Tab::Image => {
                 if self.image_table_focus {
+                    let images = self.filtered_images();
                     if let Some(index) = self.image_table_state.selected()
-                        && let Some(image) = self.images.get(index)
+                        && let Some(image) = images.get(index)
                     {
                         self.push_output(format!(
                             "[image] {} | {} | {} bytes",
@@ -951,6 +1154,18 @@ impl App {
                 None
             }
             Tab::Network => {
+                if self.network_table_focus {
+                    let networks = self.filtered_networks();
+                    if let Some(index) = self.network_table_state.selected()
+                        && let Some(network) = networks.get(index)
+                    {
+                        self.push_output(format!(
+                            "[network] {} | {} | {}",
+                            network.name, network.driver, network.scope
+                        ));
+                    }
+                    return None;
+                }
                 if let Some(i) = self.network_list_state.selected()
                     && let Some(action) = self.network_actions.get(i).cloned()
                 {
@@ -959,6 +1174,18 @@ impl App {
                 None
             }
             Tab::Volume => {
+                if self.volume_table_focus {
+                    let volumes = self.filtered_volumes();
+                    if let Some(index) = self.volume_table_state.selected()
+                        && let Some(volume) = volumes.get(index)
+                    {
+                        self.push_output(format!(
+                            "[volume] {} | {} | {}",
+                            volume.name, volume.driver, volume.mountpoint
+                        ));
+                    }
+                    return None;
+                }
                 if let Some(i) = self.volume_list_state.selected()
                     && let Some(action) = self.volume_actions.get(i).cloned()
                 {
@@ -1097,6 +1324,60 @@ mod tests {
     }
 
     #[test]
+    fn event_history_and_alerts_are_bounded() {
+        let mut app = App::new();
+        for index in 0..600 {
+            app.push_event(format!("event {}", index), Some(format!("alert {}", index)));
+        }
+
+        assert_eq!(app.event_lines.len(), 500);
+        assert_eq!(app.alerts.len(), 100);
+        assert_eq!(
+            app.event_lines.front().map(String::as_str),
+            Some("event 100")
+        );
+        assert_eq!(app.alerts.front().map(String::as_str), Some("alert 500"));
+    }
+
+    #[test]
+    fn disk_usage_requests_are_read_only() {
+        let request = TaskRequest::DiskUsage { preview: true };
+        assert_eq!(request.mutation(), Mutation::ReadOnly);
+    }
+
+    #[test]
+    fn volume_backup_requires_mutation_confirmation() {
+        let mut app = App::new();
+        app.current_tab = Tab::Volume;
+        app.volume_list_state.select(Some(3));
+        app.execute_selected();
+        app.input_buffer = "data|/tmp/data.tar.gz".to_string();
+
+        let request = app.confirm_input().expect("backup request");
+
+        assert_eq!(request.mutation(), Mutation::Mutating);
+        assert!(
+            app.output_lines
+                .back()
+                .is_some_and(|line| line.contains("inconsistent"))
+        );
+    }
+
+    #[test]
+    fn empty_filter_input_restores_the_full_list() {
+        let mut app = App::new();
+        app.start_container_filter();
+        app.input_buffer = "api".to_string();
+        app.confirm_input();
+        assert_eq!(app.container_filter, "api");
+
+        app.start_container_filter();
+        app.confirm_input();
+
+        assert!(app.container_filter.is_empty());
+    }
+
+    #[test]
     fn dashboard_request_is_read_only() {
         let app = App::new();
         let request = app.dashboard_request();
@@ -1200,6 +1481,15 @@ mod tests {
             app.execute_selected(),
             Some(TaskRequest::ListNetworks)
         ));
+        app.set_networks(vec![NetworkRow {
+            id: "net-id".to_string(),
+            name: "bridge".to_string(),
+            driver: "bridge".to_string(),
+            scope: "local".to_string(),
+        }]);
+        app.toggle_focus();
+        app.execute_selected();
+        assert!(app.network_table_focus);
 
         app.current_tab = Tab::Volume;
         app.volume_list_state.select(Some(0));
@@ -1207,5 +1497,41 @@ mod tests {
             app.execute_selected(),
             Some(TaskRequest::ListVolumes)
         ));
+        app.set_volumes(vec![VolumeRow {
+            name: "data".to_string(),
+            driver: "local".to_string(),
+            mountpoint: "/var/lib/data".to_string(),
+        }]);
+        app.toggle_focus();
+        app.execute_selected();
+        assert!(app.volume_table_focus);
+    }
+
+    #[test]
+    fn all_resource_tables_support_filters() {
+        let mut app = App::new();
+        app.set_images(vec![ImageRow {
+            id: "abc".to_string(),
+            tag: "web:latest".to_string(),
+            size: 1,
+        }]);
+        app.set_networks(vec![NetworkRow {
+            id: "net".to_string(),
+            name: "frontend".to_string(),
+            driver: "bridge".to_string(),
+            scope: "local".to_string(),
+        }]);
+        app.set_volumes(vec![VolumeRow {
+            name: "database".to_string(),
+            driver: "local".to_string(),
+            mountpoint: "/data".to_string(),
+        }]);
+        app.image_filter = "web".to_string();
+        app.network_filter = "front".to_string();
+        app.volume_filter = "data".to_string();
+
+        assert_eq!(app.filtered_images().len(), 1);
+        assert_eq!(app.filtered_networks().len(), 1);
+        assert_eq!(app.filtered_volumes().len(), 1);
     }
 }
