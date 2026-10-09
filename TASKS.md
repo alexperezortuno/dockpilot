@@ -13,7 +13,7 @@
 - [x] DS-008: Bollard Docker Engine connection and disconnected state.
 - [x] DS-009: Container table with selection, sorting, filtering and search.
 - [x] DS-010: Inspect and guarded container lifecycle operations.
-- [ ] DS-011: Follow/search/pause logs with bounded ring buffer.
+- [x] DS-011: Follow/search/pause logs with bounded ring buffer.
 - [ ] DS-012: Dashboard, health and CPU/memory statistics.
 
 ## P2
