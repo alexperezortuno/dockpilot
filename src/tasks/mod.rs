@@ -1,9 +1,31 @@
-use crate::docker::{CommandSpec, run_command, run_stop_all};
+use crate::{
+    docker::{CommandSpec, run_command, run_stop_all},
+    security::Mutation,
+};
 use tokio::{sync::mpsc, task::JoinHandle};
 
 pub enum TaskRequest {
-    Command(CommandSpec),
+    Command {
+        spec: CommandSpec,
+        mutation: Mutation,
+    },
     StopAll,
+}
+
+impl TaskRequest {
+    pub fn mutation(&self) -> Mutation {
+        match self {
+            Self::Command { mutation, .. } => *mutation,
+            Self::StopAll => Mutation::Destructive,
+        }
+    }
+
+    pub fn description(&self) -> String {
+        match self {
+            Self::Command { spec, .. } => spec.display(),
+            Self::StopAll => "detener todos los contenedores".to_string(),
+        }
+    }
 }
 
 pub enum TaskEvent {
@@ -44,7 +66,7 @@ impl TaskManager {
             }
 
             let progress = match &request {
-                TaskRequest::Command(spec) => format!("ejecutando: {}", spec.display()),
+                TaskRequest::Command { spec, .. } => format!("ejecutando: {}", spec.display()),
                 TaskRequest::StopAll => "deteniendo contenedores activos".to_string(),
             };
             if sender
@@ -59,7 +81,7 @@ impl TaskManager {
             }
 
             let lines = match request {
-                TaskRequest::Command(spec) => run_command(spec).await.lines,
+                TaskRequest::Command { spec, .. } => run_command(spec).await.lines,
                 TaskRequest::StopAll => run_stop_all()
                     .await
                     .into_iter()
@@ -107,14 +129,20 @@ impl Drop for TaskManager {
 #[cfg(test)]
 mod tests {
     use super::{TaskManager, TaskRequest};
-    use crate::docker::CommandSpec;
+    use crate::{docker::CommandSpec, security::Mutation};
 
     #[tokio::test]
     async fn manager_allows_one_active_task_and_cancels_it() {
         let mut manager = TaskManager::new(1);
 
-        assert!(manager.spawn(TaskRequest::Command(CommandSpec::new("docker"))));
-        assert!(!manager.spawn(TaskRequest::Command(CommandSpec::new("docker"))));
+        assert!(manager.spawn(TaskRequest::Command {
+            spec: CommandSpec::new("docker"),
+            mutation: Mutation::ReadOnly,
+        }));
+        assert!(!manager.spawn(TaskRequest::Command {
+            spec: CommandSpec::new("docker"),
+            mutation: Mutation::ReadOnly,
+        }));
         assert!(manager.cancel());
         assert!(!manager.cancel());
     }
