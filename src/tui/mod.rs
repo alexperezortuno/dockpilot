@@ -97,9 +97,10 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
                 .iter()
                 .map(|a| {
                     let s = match a {
-                        ContainerAction::Start => "Start Containers",
+                        ContainerAction::StartAll => "Start All Containers",
+                        ContainerAction::Start => "Start Container by Name",
                         ContainerAction::StopAll => "Stop all Containers",
-                        ContainerAction::Stop => "Stop Containers",
+                        ContainerAction::Stop => "Stop Container by Name",
                         ContainerAction::Restart => "Restart Container",
                         ContainerAction::ListAll => "List All Containers",
                         ContainerAction::List => "List Containers",
@@ -338,9 +339,10 @@ fn draw_container_tab(f: &mut Frame, app: &mut App, area: Rect) {
 
     let items = app.container_actions.iter().map(|action| {
         let label = match action {
-            ContainerAction::Start => "Start Containers",
+            ContainerAction::StartAll => "Start All Containers",
+            ContainerAction::Start => "Start Container by Name",
             ContainerAction::StopAll => "Stop all Containers",
-            ContainerAction::Stop => "Stop Containers",
+            ContainerAction::Stop => "Stop Container by Name",
             ContainerAction::Restart => "Restart Container",
             ContainerAction::ListAll => "List All Containers",
             ContainerAction::List => "List Containers",
