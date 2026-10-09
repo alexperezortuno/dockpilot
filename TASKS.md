@@ -10,7 +10,7 @@
 - [x] DS-007: Add destructive-action confirmation and read-only context enforcement.
 
 ## P1
-- [ ] DS-008: Bollard Docker Engine connection and disconnected state.
+- [x] DS-008: Bollard Docker Engine connection and disconnected state.
 - [ ] DS-009: Container table with selection, sorting, filtering and search.
 - [ ] DS-010: Inspect and guarded container lifecycle operations.
 - [ ] DS-011: Follow/search/pause logs with bounded ring buffer.
