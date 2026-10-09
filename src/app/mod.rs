@@ -2,13 +2,18 @@ use crate::{
     config::ThemeName,
     docker::{
         CommandSpec,
-        client::{ContainerLifecycle, ContainerRow, DashboardData, ImageRow},
+        client::{
+            ContainerLifecycle, ContainerRow, DashboardData, ImageRow, NetworkRow, VolumeRow,
+        },
     },
     security::Mutation,
     tasks::TaskRequest,
 };
 use ratatui::widgets::ListState;
 use std::{collections::VecDeque, path::PathBuf};
+
+mod navigation;
+mod output;
 
 const MAX_LOG_LINES: usize = 2_000;
 
@@ -68,16 +73,6 @@ pub enum ProjectAction {
     ComposeConfig,
 }
 
-#[derive(Debug, Clone)]
-pub enum MachineAction {
-    List,
-    Start,
-    Stop,
-    Env,
-    Eval,
-    Ip,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum Tab {
     Dashboard,
@@ -86,7 +81,6 @@ pub enum Tab {
     Network,
     Volume,
     Project,
-    Machine,
     Help,
 }
 
@@ -143,16 +137,19 @@ pub struct App {
     pub(crate) image_table_state: ratatui::widgets::TableState,
     pub(crate) image_table_focus: bool,
     pub(crate) network_actions: Vec<NetworkAction>,
+    pub(crate) networks: Vec<NetworkRow>,
+    pub(crate) network_table_state: ratatui::widgets::TableState,
     pub(crate) volume_actions: Vec<VolumeAction>,
+    pub(crate) volumes: Vec<VolumeRow>,
+    pub(crate) volume_table_state: ratatui::widgets::TableState,
     pub(crate) project_actions: Vec<ProjectAction>,
-    pub(crate) machine_actions: Vec<MachineAction>,
-    pub(crate) output_lines: Vec<String>,
+    pub(crate) output_lines: VecDeque<String>,
+    pub(crate) output_capacity: usize,
     pub(crate) container_list_state: ListState,
     pub(crate) image_list_state: ListState,
     pub(crate) network_list_state: ListState,
     pub(crate) volume_list_state: ListState,
     pub(crate) project_list_state: ListState,
-    pub(crate) machine_list_state: ListState,
     pub(crate) output_scroll: u16,
     pub(crate) project_folder: String,
     pub(crate) engine_status: String,
@@ -221,11 +218,15 @@ impl App {
                 NetworkAction::Create,
                 NetworkAction::Remove,
             ],
+            networks: Vec::new(),
+            network_table_state: ratatui::widgets::TableState::default(),
             volume_actions: vec![
                 VolumeAction::List,
                 VolumeAction::Create,
                 VolumeAction::Remove,
             ],
+            volumes: Vec::new(),
+            volume_table_state: ratatui::widgets::TableState::default(),
             project_actions: vec![
                 ProjectAction::SetFolder,
                 ProjectAction::ComposeUp,
@@ -233,21 +234,13 @@ impl App {
                 ProjectAction::ComposeDown,
                 ProjectAction::ComposeConfig,
             ],
-            machine_actions: vec![
-                MachineAction::List,
-                MachineAction::Start,
-                MachineAction::Stop,
-                MachineAction::Env,
-                MachineAction::Eval,
-                MachineAction::Ip,
-            ],
-            output_lines: vec![],
+            output_lines: VecDeque::new(),
+            output_capacity: 2_000,
             container_list_state: ListState::default(),
             image_list_state: ListState::default(),
             network_list_state: ListState::default(),
             volume_list_state: ListState::default(),
             project_list_state: ListState::default(),
-            machine_list_state: ListState::default(),
             output_scroll: 0,
             project_folder,
             engine_status: "checking Docker Engine".to_string(),
@@ -272,18 +265,24 @@ impl App {
         app.network_list_state.select(Some(0));
         app.volume_list_state.select(Some(0));
         app.project_list_state.select(Some(0));
-        app.machine_list_state.select(Some(0));
 
         app
     }
 
     pub fn push_output(&mut self, line: impl Into<String>) {
-        self.output_lines.push(line.into());
+        output::push(&mut self.output_lines, self.output_capacity, line);
         self.output_scroll = self.output_lines.len() as u16;
     }
 
     pub fn append_output(&mut self, lines: impl IntoIterator<Item = String>) {
-        self.output_lines.extend(lines);
+        for line in lines {
+            self.push_output(line);
+        }
+    }
+
+    pub fn set_output_capacity(&mut self, capacity: usize) {
+        self.output_capacity = capacity.max(1);
+        output::resize(&mut self.output_lines, self.output_capacity);
         self.output_scroll = self.output_lines.len() as u16;
     }
 
@@ -300,6 +299,25 @@ impl App {
     pub fn set_images(&mut self, images: Vec<ImageRow>) {
         self.images = images;
         self.image_table_state.select(if self.images.is_empty() {
+            None
+        } else {
+            Some(0)
+        });
+    }
+
+    pub fn set_networks(&mut self, networks: Vec<NetworkRow>) {
+        self.networks = networks;
+        self.network_table_state
+            .select(if self.networks.is_empty() {
+                None
+            } else {
+                Some(0)
+            });
+    }
+
+    pub fn set_volumes(&mut self, volumes: Vec<VolumeRow>) {
+        self.volumes = volumes;
+        self.volume_table_state.select(if self.volumes.is_empty() {
             None
         } else {
             Some(0)
@@ -421,53 +439,19 @@ impl App {
 
     // --- Generic navigation ---
     fn next_in_list(state: &mut ListState, len: usize) {
-        if len == 0 {
-            return;
-        }
-        let i = match state.selected() {
-            Some(i) => (i + 1) % len,
-            None => 0,
-        };
-        state.select(Some(i));
+        navigation::next_list(state, len);
     }
 
     fn previous_in_list(state: &mut ListState, len: usize) {
-        if len == 0 {
-            return;
-        }
-        let i = match state.selected() {
-            Some(i) => {
-                if i == 0 {
-                    len - 1
-                } else {
-                    i - 1
-                }
-            }
-            None => 0,
-        };
-        state.select(Some(i));
+        navigation::previous_list(state, len);
     }
 
     fn next_in_table(state: &mut ratatui::widgets::TableState, len: usize) {
-        if len == 0 {
-            return;
-        }
-        let index = match state.selected() {
-            Some(index) => (index + 1) % len,
-            None => 0,
-        };
-        state.select(Some(index));
+        navigation::next_table(state, len);
     }
 
     fn previous_in_table(state: &mut ratatui::widgets::TableState, len: usize) {
-        if len == 0 {
-            return;
-        }
-        let index = match state.selected() {
-            Some(0) | None => len - 1,
-            Some(index) => index - 1,
-        };
-        state.select(Some(index));
+        navigation::previous_table(state, len);
     }
 
     pub fn next(&mut self) {
@@ -499,9 +483,6 @@ impl App {
             }
             Tab::Project => {
                 Self::next_in_list(&mut self.project_list_state, self.project_actions.len())
-            }
-            Tab::Machine => {
-                Self::next_in_list(&mut self.machine_list_state, self.machine_actions.len())
             }
             Tab::Help => {}
         }
@@ -537,9 +518,6 @@ impl App {
             Tab::Project => {
                 Self::previous_in_list(&mut self.project_list_state, self.project_actions.len())
             }
-            Tab::Machine => {
-                Self::previous_in_list(&mut self.machine_list_state, self.machine_actions.len())
-            }
             Tab::Help => {}
         }
     }
@@ -551,8 +529,7 @@ impl App {
             Tab::Image => Tab::Network,
             Tab::Network => Tab::Volume,
             Tab::Volume => Tab::Project,
-            Tab::Project => Tab::Machine,
-            Tab::Machine => Tab::Help,
+            Tab::Project => Tab::Help,
             Tab::Help => Tab::Dashboard,
         };
     }
@@ -565,8 +542,7 @@ impl App {
             Tab::Network => Tab::Image,
             Tab::Volume => Tab::Network,
             Tab::Project => Tab::Volume,
-            Tab::Machine => Tab::Project,
-            Tab::Help => Tab::Machine,
+            Tab::Help => Tab::Project,
         };
     }
 
@@ -594,8 +570,7 @@ impl App {
         self.input_prompt.clear();
 
         if value.is_empty() {
-            self.output_lines
-                .push("[entrada cancelada: valor vacío]".to_string());
+            self.push_output("[entrada cancelada: valor vacío]");
             return None;
         }
 
@@ -747,8 +722,7 @@ impl App {
             PendingAction::ProjectSetFolder => {
                 self.project_folder = value.to_string();
                 let folder = self.project_folder.clone();
-                self.output_lines
-                    .push(format!("[proyecto] carpeta establecida: {}", folder));
+                self.push_output(format!("[proyecto] carpeta establecida: {}", folder));
                 self.execute_command(CommandSpec::new("ls").args(["-la"]).arg(folder))
             }
             PendingAction::ComposeProfileUp => {
@@ -897,9 +871,7 @@ impl App {
 
     fn run_network_action(&mut self, action: &NetworkAction) -> Option<TaskRequest> {
         match action {
-            NetworkAction::List => {
-                self.execute_command(CommandSpec::new("docker").args(["network", "ls"]))
-            }
+            NetworkAction::List => Some(TaskRequest::ListNetworks),
             NetworkAction::Create => {
                 self.start_input("Nombre de la nueva red:", PendingAction::NetworkCreate)
             }
@@ -911,9 +883,7 @@ impl App {
 
     fn run_volume_action(&mut self, action: &VolumeAction) -> Option<TaskRequest> {
         match action {
-            VolumeAction::List => {
-                self.execute_command(CommandSpec::new("docker").args(["volume", "ls"]))
-            }
+            VolumeAction::List => Some(TaskRequest::ListVolumes),
             VolumeAction::Create => {
                 self.start_input("Nombre del nuevo volumen:", PendingAction::VolumeCreate)
             }
@@ -936,26 +906,6 @@ impl App {
             }
             ProjectAction::ComposeDown => self.execute_compose_down(),
             ProjectAction::ComposeConfig => self.execute_compose_read_only(&["compose", "config"]),
-        }
-    }
-
-    fn run_machine_action(&mut self, action: &MachineAction) -> Option<TaskRequest> {
-        match action {
-            MachineAction::List => {
-                self.execute_command(CommandSpec::new("docker-machine").args(["ls"]))
-            }
-            MachineAction::Start => self.execute_mutating_command(
-                CommandSpec::new("docker-machine").args(["start", "default"]),
-            ),
-            MachineAction::Stop => self.execute_mutating_command(
-                CommandSpec::new("docker-machine").args(["stop", "default"]),
-            ),
-            MachineAction::Env | MachineAction::Eval => {
-                self.execute_command(CommandSpec::new("docker-machine").args(["env", "default"]))
-            }
-            MachineAction::Ip => {
-                self.execute_command(CommandSpec::new("docker-machine").args(["ip", "default"]))
-            }
         }
     }
 
@@ -1024,14 +974,6 @@ impl App {
                 }
                 None
             }
-            Tab::Machine => {
-                if let Some(i) = self.machine_list_state.selected()
-                    && let Some(action) = self.machine_actions.get(i).cloned()
-                {
-                    return self.run_machine_action(&action);
-                }
-                None
-            }
             Tab::Help => None,
         }
     }
@@ -1077,7 +1019,7 @@ mod tests {
         assert!(!app.input_mode);
         assert!(app.pending_action.is_none());
         assert_eq!(
-            app.output_lines.last().map(String::as_str),
+            app.output_lines.back().map(String::as_str),
             Some("[entrada cancelada: valor vacío]")
         );
     }
@@ -1139,6 +1081,19 @@ mod tests {
         assert_eq!(app.log_lines.len(), MAX_LOG_LINES);
         assert_eq!(app.log_lines.front().map(String::as_str), Some("line 1"));
         assert_eq!(app.filtered_log_lines(), vec!["line 2000"]);
+    }
+
+    #[test]
+    fn general_output_buffer_evicts_oldest_lines_at_capacity() {
+        let mut app = App::new();
+        app.set_output_capacity(2);
+        app.push_output("first");
+        app.push_output("second");
+        app.push_output("third");
+
+        assert_eq!(app.output_lines.len(), 2);
+        assert_eq!(app.output_lines.front().map(String::as_str), Some("second"));
+        assert_eq!(app.output_lines.back().map(String::as_str), Some("third"));
     }
 
     #[test]
@@ -1231,8 +1186,26 @@ mod tests {
         assert!(app.image_table_focus);
         assert!(
             app.output_lines
-                .last()
+                .back()
                 .is_some_and(|line| line.contains("demo:latest"))
         );
+    }
+
+    #[test]
+    fn network_and_volume_list_actions_use_bollard_requests() {
+        let mut app = App::new();
+        app.current_tab = Tab::Network;
+        app.network_list_state.select(Some(0));
+        assert!(matches!(
+            app.execute_selected(),
+            Some(TaskRequest::ListNetworks)
+        ));
+
+        app.current_tab = Tab::Volume;
+        app.volume_list_state.select(Some(0));
+        assert!(matches!(
+            app.execute_selected(),
+            Some(TaskRequest::ListVolumes)
+        ));
     }
 }

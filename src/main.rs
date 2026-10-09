@@ -50,6 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::with_project_folder(config.project_folder.clone());
+    app.set_output_capacity(config.output_capacity);
     app.set_theme(config.theme);
     let engine_connection = EngineConnection::connect(config.docker_context.as_deref()).await;
     let engine_status = engine_connection.status_message();
@@ -102,6 +103,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let count = images.len();
                     app.set_images(images);
                     app.push_output(format!("[docker] loaded {} images", count));
+                    task_manager.complete(id);
+                }
+                TaskEvent::Networks { id, networks } => {
+                    app.set_networks(networks);
+                    task_manager.complete(id);
+                }
+                TaskEvent::Volumes { id, volumes } => {
+                    app.set_volumes(volumes);
                     task_manager.complete(id);
                 }
             }
@@ -175,6 +184,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         (KeyCode::Char('d'), _) => Some(app.dashboard_request()),
                         (KeyCode::Char('i'), _) => Some(TaskRequest::ListImages),
+                        (KeyCode::Char('n'), _) => Some(TaskRequest::ListNetworks),
+                        (KeyCode::Char('v'), _) => Some(TaskRequest::ListVolumes),
                         (KeyCode::Char('f'), _) => {
                             app.start_container_filter();
                             None
