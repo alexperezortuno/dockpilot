@@ -23,7 +23,7 @@
 - [x] DS-016: Themes, shortcuts and preference persistence.
 
 ## P3
-- [ ] DS-017: Networks and volumes.
+- [x] DS-017: Networks and volumes.
 - [ ] DS-018: Docker events and local monitoring alerts.
 - [ ] DS-019: Disk usage and safe cleanup previews.
 - [ ] DS-020: Optional volume backup/restore with consistency warnings.
