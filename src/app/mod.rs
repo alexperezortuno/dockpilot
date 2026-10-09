@@ -1,4 +1,8 @@
-use crate::{docker::CommandSpec, security::Mutation, tasks::TaskRequest};
+use crate::{
+    docker::{CommandSpec, client::ContainerRow},
+    security::Mutation,
+    tasks::TaskRequest,
+};
 use ratatui::widgets::ListState;
 use std::path::PathBuf;
 
@@ -73,6 +77,13 @@ pub enum Tab {
     Help,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerSort {
+    Name,
+    Image,
+    State,
+}
+
 /// Actions that require a user-supplied parameter.
 #[derive(Debug, Clone)]
 pub enum PendingAction {
@@ -86,6 +97,7 @@ pub enum PendingAction {
     ContainerWait,
     ContainerRemove,
     ContainerCreate,
+    ContainerFilter,
     // Image
     ImageRemove,
     ImagePush,
@@ -123,6 +135,11 @@ pub struct App {
     pub(crate) output_scroll: u16,
     pub(crate) project_folder: String,
     pub(crate) engine_status: String,
+    pub(crate) containers: Vec<ContainerRow>,
+    pub(crate) container_table_state: ratatui::widgets::TableState,
+    pub(crate) container_table_focus: bool,
+    pub(crate) container_filter: String,
+    pub(crate) container_sort: ContainerSort,
     // Input mode
     pub(crate) input_mode: bool,
     pub(crate) input_buffer: String,
@@ -197,6 +214,11 @@ impl App {
             output_scroll: 0,
             project_folder,
             engine_status: "checking Docker Engine".to_string(),
+            containers: Vec::new(),
+            container_table_state: ratatui::widgets::TableState::default(),
+            container_table_focus: true,
+            container_filter: String::new(),
+            container_sort: ContainerSort::Name,
             input_mode: false,
             input_buffer: String::new(),
             input_prompt: String::new(),
@@ -221,6 +243,60 @@ impl App {
     pub fn append_output(&mut self, lines: impl IntoIterator<Item = String>) {
         self.output_lines.extend(lines);
         self.output_scroll = self.output_lines.len() as u16;
+    }
+
+    pub fn set_containers(&mut self, containers: Vec<ContainerRow>) {
+        self.containers = containers;
+        self.container_table_state
+            .select(if self.containers.is_empty() {
+                None
+            } else {
+                Some(0)
+            });
+    }
+
+    pub fn toggle_container_focus(&mut self) {
+        self.container_table_focus = !self.container_table_focus;
+    }
+
+    pub fn toggle_container_sort(&mut self) {
+        self.container_sort = match self.container_sort {
+            ContainerSort::Name => ContainerSort::Image,
+            ContainerSort::Image => ContainerSort::State,
+            ContainerSort::State => ContainerSort::Name,
+        };
+        self.container_table_state.select(Some(0));
+    }
+
+    pub fn start_container_filter(&mut self) {
+        self.start_input("Filtro de contenedores:", PendingAction::ContainerFilter);
+    }
+
+    pub fn filtered_containers(&self) -> Vec<ContainerRow> {
+        let filter = self.container_filter.to_lowercase();
+        let mut containers: Vec<_> = self
+            .containers
+            .iter()
+            .filter(|container| {
+                filter.is_empty()
+                    || [
+                        &container.id,
+                        &container.name,
+                        &container.image,
+                        &container.state,
+                        &container.status,
+                    ]
+                    .iter()
+                    .any(|value| value.to_lowercase().contains(&filter))
+            })
+            .cloned()
+            .collect();
+        containers.sort_by(|left, right| match self.container_sort {
+            ContainerSort::Name => left.name.cmp(&right.name),
+            ContainerSort::Image => left.image.cmp(&right.image),
+            ContainerSort::State => left.state.cmp(&right.state),
+        });
+        containers
     }
 
     pub fn set_engine_status(&mut self, status: impl Into<String>) {
@@ -256,10 +332,40 @@ impl App {
         state.select(Some(i));
     }
 
+    fn next_in_table(state: &mut ratatui::widgets::TableState, len: usize) {
+        if len == 0 {
+            return;
+        }
+        let index = match state.selected() {
+            Some(index) => (index + 1) % len,
+            None => 0,
+        };
+        state.select(Some(index));
+    }
+
+    fn previous_in_table(state: &mut ratatui::widgets::TableState, len: usize) {
+        if len == 0 {
+            return;
+        }
+        let index = match state.selected() {
+            Some(0) | None => len - 1,
+            Some(index) => index - 1,
+        };
+        state.select(Some(index));
+    }
+
     pub fn next(&mut self) {
         match self.current_tab {
             Tab::Container => {
-                Self::next_in_list(&mut self.container_list_state, self.container_actions.len())
+                if self.container_table_focus {
+                    let len = self.filtered_containers().len();
+                    Self::next_in_table(&mut self.container_table_state, len);
+                } else {
+                    Self::next_in_list(
+                        &mut self.container_list_state,
+                        self.container_actions.len(),
+                    );
+                }
             }
             Tab::Image => Self::next_in_list(&mut self.image_list_state, self.image_actions.len()),
             Tab::Network => {
@@ -281,7 +387,15 @@ impl App {
     pub fn previous(&mut self) {
         match self.current_tab {
             Tab::Container => {
-                Self::previous_in_list(&mut self.container_list_state, self.container_actions.len())
+                if self.container_table_focus {
+                    let len = self.filtered_containers().len();
+                    Self::previous_in_table(&mut self.container_table_state, len);
+                } else {
+                    Self::previous_in_list(
+                        &mut self.container_list_state,
+                        self.container_actions.len(),
+                    );
+                }
             }
             Tab::Image => {
                 Self::previous_in_list(&mut self.image_list_state, self.image_actions.len())
@@ -420,6 +534,11 @@ impl App {
                         .args(["-p", "83:83"])
                         .arg(image),
                 )
+            }
+            PendingAction::ContainerFilter => {
+                self.container_filter = value.to_string();
+                self.container_table_state.select(Some(0));
+                None
             }
             // Image
             PendingAction::ImageRemove => self
@@ -661,6 +780,17 @@ impl App {
     pub fn execute_selected(&mut self) -> Option<TaskRequest> {
         match self.current_tab {
             Tab::Container => {
+                if self.container_table_focus {
+                    if let Some(index) = self.container_table_state.selected()
+                        && let Some(container) = self.filtered_containers().get(index)
+                    {
+                        self.push_output(format!(
+                            "[container] {} | {} | {} | {}",
+                            container.name, container.image, container.state, container.status
+                        ));
+                    }
+                    return None;
+                }
                 if let Some(i) = self.container_list_state.selected()
                     && let Some(action) = self.container_actions.get(i).cloned()
                 {
@@ -720,6 +850,7 @@ mod tests {
     #[test]
     fn next_wraps_to_first_container_action() {
         let mut app = App::new();
+        app.container_table_focus = false;
         app.container_list_state
             .select(Some(app.container_actions.len() - 1));
 
@@ -731,6 +862,7 @@ mod tests {
     #[test]
     fn previous_wraps_to_last_container_action() {
         let mut app = App::new();
+        app.container_table_focus = false;
         app.container_list_state.select(Some(0));
 
         app.previous();
@@ -754,5 +886,32 @@ mod tests {
             app.output_lines.last().map(String::as_str),
             Some("[entrada cancelada: valor vacío]")
         );
+    }
+
+    #[test]
+    fn container_filter_matches_name_and_sorts_by_selected_field() {
+        let mut app = App::new();
+        app.set_containers(vec![
+            ContainerRow {
+                id: "a".to_string(),
+                name: "api".to_string(),
+                image: "z-image".to_string(),
+                state: "running".to_string(),
+                status: "Up".to_string(),
+            },
+            ContainerRow {
+                id: "b".to_string(),
+                name: "worker".to_string(),
+                image: "a-image".to_string(),
+                state: "exited".to_string(),
+                status: "Exited".to_string(),
+            },
+        ]);
+        app.container_filter = "api".to_string();
+
+        let containers = app.filtered_containers();
+
+        assert_eq!(containers.len(), 1);
+        assert_eq!(containers[0].name, "api");
     }
 }
