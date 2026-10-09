@@ -59,6 +59,8 @@ pub struct DashboardData {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContainerLifecycle {
+    Start,
+    Stop,
     Restart,
     Pause,
     Unpause,
@@ -68,6 +70,8 @@ pub enum ContainerLifecycle {
 impl ContainerLifecycle {
     pub fn label(self) -> &'static str {
         match self {
+            Self::Start => "start",
+            Self::Stop => "stop",
             Self::Restart => "restart",
             Self::Pause => "pause",
             Self::Unpause => "unpause",
@@ -144,6 +148,16 @@ pub async fn apply_container_lifecycle(
     operation: ContainerLifecycle,
 ) -> Result<Vec<String>, String> {
     let result = match operation {
+        ContainerLifecycle::Start => {
+            client
+                .start_container(id, None::<bollard::query_parameters::StartContainerOptions>)
+                .await
+        }
+        ContainerLifecycle::Stop => {
+            client
+                .stop_container(id, None::<bollard::query_parameters::StopContainerOptions>)
+                .await
+        }
         ContainerLifecycle::Restart => {
             client
                 .restart_container(
@@ -171,6 +185,31 @@ pub async fn apply_container_lifecycle(
             ]
         })
         .map_err(|error| error.to_string())
+}
+
+pub async fn start_all_containers(client: &Docker) -> Result<Vec<String>, String> {
+    let containers = list_containers(client).await?;
+    let mut lines = Vec::new();
+
+    for container in containers {
+        if container.state.eq_ignore_ascii_case("running") {
+            continue;
+        }
+        client
+            .start_container(
+                &container.id,
+                None::<bollard::query_parameters::StartContainerOptions>,
+            )
+            .await
+            .map_err(|error| format!("{}: {}", container.name, error))?;
+        lines.push(format!("[docker] started container {}", container.name));
+    }
+
+    if lines.is_empty() {
+        lines.push("[docker] all containers are already running".to_string());
+    }
+    lines.push(String::new());
+    Ok(lines)
 }
 
 pub async fn dashboard_data(
