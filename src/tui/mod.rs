@@ -115,14 +115,20 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
     }
 
     if matches!(app.current_tab, Tab::Network) {
-        draw_network_tab(f, app, chunks[1]);
+        draw_network_tab(f, app, chunks[1], colors);
         draw_output(f, app, chunks[2]);
+        if let Some(area) = input_area {
+            draw_input(f, app, area);
+        }
         return;
     }
 
     if matches!(app.current_tab, Tab::Volume) {
-        draw_volume_tab(f, app, chunks[1]);
+        draw_volume_tab(f, app, chunks[1], colors);
         draw_output(f, app, chunks[2]);
+        if let Some(area) = input_area {
+            draw_input(f, app, area);
+        }
         return;
     }
 
@@ -388,7 +394,7 @@ fn draw_image_tab(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
     f.render_stateful_widget(list, panes[1], &mut app.image_list_state);
 }
 
-fn draw_network_tab(f: &mut Frame, app: &mut App, area: Rect) {
+fn draw_network_tab(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
     let panes = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(72), Constraint::Percentage(28)])
@@ -411,7 +417,20 @@ fn draw_network_tab(f: &mut Frame, app: &mut App, area: Rect) {
         ],
     )
     .header(Row::new(["ID", "Name", "Driver", "Scope"]))
-    .block(Block::default().borders(Borders::ALL).title("Networks"));
+    .block(Block::default().borders(Borders::ALL).title(format!(
+        " Networks | focus: {} ",
+        if app.network_table_focus {
+            "table"
+        } else {
+            "actions"
+        }
+    )))
+    .row_highlight_style(
+        Style::default()
+            .bg(colors.selection)
+            .add_modifier(Modifier::BOLD),
+    )
+    .highlight_symbol(">> ");
     f.render_stateful_widget(table, panes[0], &mut app.network_table_state);
     let items = app.network_actions.iter().map(|action| {
         ListItem::new(match action {
@@ -420,11 +439,18 @@ fn draw_network_tab(f: &mut Frame, app: &mut App, area: Rect) {
             NetworkAction::Remove => "Remove Network",
         })
     });
-    let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Actions"));
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title("Actions"))
+        .highlight_style(
+            Style::default()
+                .bg(colors.selection)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol(">> ");
     f.render_stateful_widget(list, panes[1], &mut app.network_list_state);
 }
 
-fn draw_volume_tab(f: &mut Frame, app: &mut App, area: Rect) {
+fn draw_volume_tab(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
     let panes = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(72), Constraint::Percentage(28)])
@@ -445,7 +471,20 @@ fn draw_volume_tab(f: &mut Frame, app: &mut App, area: Rect) {
         ],
     )
     .header(Row::new(["Name", "Driver", "Mountpoint"]))
-    .block(Block::default().borders(Borders::ALL).title("Volumes"));
+    .block(Block::default().borders(Borders::ALL).title(format!(
+        " Volumes | focus: {} ",
+        if app.volume_table_focus {
+            "table"
+        } else {
+            "actions"
+        }
+    )))
+    .row_highlight_style(
+        Style::default()
+            .bg(colors.selection)
+            .add_modifier(Modifier::BOLD),
+    )
+    .highlight_symbol(">> ");
     f.render_stateful_widget(table, panes[0], &mut app.volume_table_state);
     let items = app.volume_actions.iter().map(|action| {
         ListItem::new(match action {
@@ -454,7 +493,14 @@ fn draw_volume_tab(f: &mut Frame, app: &mut App, area: Rect) {
             VolumeAction::Remove => "Remove Volume",
         })
     });
-    let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Actions"));
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title("Actions"))
+        .highlight_style(
+            Style::default()
+                .bg(colors.selection)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol(">> ");
     f.render_stateful_widget(list, panes[1], &mut app.volume_list_state);
 }
 
