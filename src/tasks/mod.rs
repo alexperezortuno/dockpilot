@@ -9,6 +9,8 @@ use crate::{
     },
     security::Mutation,
 };
+use bollard::query_parameters::LogsOptionsBuilder;
+use futures_util::StreamExt;
 use tokio::{sync::mpsc, task::JoinHandle};
 
 pub enum TaskRequest {
@@ -24,6 +26,10 @@ pub enum TaskRequest {
     ContainerLifecycle {
         id: String,
         operation: ContainerLifecycle,
+    },
+    ContainerLogs {
+        id: String,
+        follow: bool,
     },
 }
 
@@ -41,6 +47,7 @@ impl TaskRequest {
                     Mutation::Mutating
                 }
             }
+            Self::ContainerLogs { .. } => Mutation::ReadOnly,
         }
     }
 
@@ -52,6 +59,9 @@ impl TaskRequest {
             Self::InspectContainer { id } => format!("inspeccionar contenedor {}", id),
             Self::ContainerLifecycle { id, operation } => {
                 format!("{} contenedor {}", operation.label(), id)
+            }
+            Self::ContainerLogs { id, follow } => {
+                format!("logs {}{}", id, if *follow { " (follow)" } else { "" })
             }
         }
     }
@@ -72,6 +82,9 @@ pub enum TaskEvent {
     Containers {
         id: u64,
         containers: Vec<ContainerRow>,
+    },
+    LogLine {
+        line: String,
     },
 }
 
@@ -124,6 +137,9 @@ impl TaskManager {
                 TaskRequest::InspectContainer { id } => format!("inspeccionando {}", id),
                 TaskRequest::ContainerLifecycle { id, operation } => {
                     format!("{} contenedor {}", operation.label(), id)
+                }
+                TaskRequest::ContainerLogs { id, follow } => {
+                    format!("logs {}{}", id, if *follow { " (follow)" } else { "" })
                 }
             };
             if sender
@@ -239,6 +255,66 @@ impl TaskManager {
                                 lines: vec![
                                     "[docker] Engine disconnected; cannot change container"
                                         .to_string(),
+                                    String::new(),
+                                ],
+                            })
+                            .await;
+                    }
+                },
+                TaskRequest::ContainerLogs {
+                    id: container_id,
+                    follow,
+                } => match client {
+                    Some(client) => {
+                        let options = LogsOptionsBuilder::new()
+                            .follow(follow)
+                            .stdout(true)
+                            .stderr(true)
+                            .tail("200")
+                            .build();
+                        let mut stream = client.logs(&container_id, Some(options));
+                        while let Some(result) = stream.next().await {
+                            match result {
+                                Ok(output) => {
+                                    for line in output.to_string().lines() {
+                                        if sender
+                                            .send(TaskEvent::LogLine {
+                                                line: line.to_string(),
+                                            })
+                                            .await
+                                            .is_err()
+                                        {
+                                            return;
+                                        }
+                                    }
+                                }
+                                Err(error) => {
+                                    let _ = sender
+                                        .send(TaskEvent::Finished {
+                                            id,
+                                            lines: vec![
+                                                format!("[docker] logs failed: {}", error),
+                                                String::new(),
+                                            ],
+                                        })
+                                        .await;
+                                    return;
+                                }
+                            }
+                        }
+                        let _ = sender
+                            .send(TaskEvent::Finished {
+                                id,
+                                lines: Vec::new(),
+                            })
+                            .await;
+                    }
+                    None => {
+                        let _ = sender
+                            .send(TaskEvent::Finished {
+                                id,
+                                lines: vec![
+                                    "[docker] Engine disconnected; cannot stream logs".to_string(),
                                     String::new(),
                                 ],
                             })
