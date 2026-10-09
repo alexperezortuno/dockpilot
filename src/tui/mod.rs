@@ -186,7 +186,7 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
                         ImageAction::Pull => "Pull Image",
                         ImageAction::Save => "Save Image to tar",
                         ImageAction::Load => "Load Image from tar",
-                        ImageAction::LoadViaSsh => "Load Image via SSH Context",
+                        ImageAction::UploadTarViaSsh => "Upload Tar via SSH",
                         ImageAction::History => "View Image History",
                     };
                     ListItem::new(s)
@@ -389,7 +389,7 @@ fn draw_image_tab(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
             ImageAction::Pull => "Pull Image",
             ImageAction::Save => "Save Image to tar",
             ImageAction::Load => "Load Image from tar",
-            ImageAction::LoadViaSsh => "Load Image via SSH Context",
+            ImageAction::UploadTarViaSsh => "Upload Tar via SSH",
             ImageAction::History => "View Image History",
         };
         ListItem::new(label)
@@ -655,7 +655,12 @@ fn draw_output(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_input(f: &mut Frame, app: &App, area: Rect) {
-    let text = format!("{} {}", app.input_prompt, app.input_buffer);
+    let value = if app.input_secret {
+        "*".repeat(app.input_buffer.chars().count())
+    } else {
+        app.input_buffer.clone()
+    };
+    let text = format!("{} {}", app.input_prompt, value);
     let input_widget = Paragraph::new(text).block(
         Block::default()
             .borders(Borders::ALL)
