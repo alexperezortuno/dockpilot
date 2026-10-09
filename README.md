@@ -4,7 +4,7 @@ Dockpilot is a keyboard-first Rust TUI for managing Docker Engine and Docker Com
 
 ## Current status
 
-The project is in **Phase 1: Safe foundation**.
+The project is in **Phase 2: Container-first MVP**.
 
 Completed:
 
@@ -18,6 +18,7 @@ Completed:
 - DS-005 Tokio task manager with bounded events, progress, and cancellation
 - DS-006 validated TOML configuration with environment and CLI precedence
 - DS-007 safe-mode confirmations and read-only mutation blocking
+- DS-008 Bollard Docker Engine connection with disconnected-state handling
 
 The current TUI preserves the original tabbed interface for containers, images, networks, volumes, projects, machines, and help.
 
@@ -44,7 +45,7 @@ cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-Current validation includes 9 unit tests covering application navigation, configuration precedence, terminal restoration, safe command arguments, and task cancellation.
+Current validation includes 12 unit tests covering application navigation, configuration precedence, terminal restoration, safe command arguments, task cancellation, and engine status.
 
 ## Configuration
 
@@ -80,6 +81,8 @@ Polling intervals must be between 10 and 5000 milliseconds, and the project fold
 | `q` / `Esc` | Quit |
 | `Ctrl+C` | Quit |
 
+During a confirmation prompt, press `y` to continue or `n` / `Esc` to cancel.
+
 ### Input mode
 
 | Key | Action |
@@ -104,7 +107,7 @@ Polling intervals must be between 10 and 5000 milliseconds, and the project fold
 src/
   main.rs       Terminal setup and event loop
   app/          Application state, navigation, input, and actions
-  docker/       Docker command execution
+  docker/       Docker command execution and Bollard engine connection
   tasks/        Tokio task manager and bounded task events
   tui/          Ratatui rendering
 ```
@@ -115,7 +118,7 @@ The target architecture is:
 TUI -> application state/actions/events -> Docker services -> Bollard or docker compose CLI
 ```
 
-Phase 1 is complete. Resource-first screens can now be implemented in Phase 2.
+Phase 1 is complete. Phase 2 now has a non-fatal Docker Engine connection check and can proceed with resource-first screens.
 
 ## Safety goals
 
