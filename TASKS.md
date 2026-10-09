@@ -5,8 +5,8 @@
 - [x] DS-002: Extract app state, Docker operations and TUI rendering into modules while preserving behavior.
 - [x] DS-003: Introduce RAII terminal guard and failure recovery tests.
 - [x] DS-004: Replace `sh -c` with typed, explicit argument execution; test metacharacters and paths with spaces.
-- [ ] DS-005: Introduce Tokio tasks, bounded channels, progress and cancellation; prove navigation stays responsive.
-- [ ] DS-006: Add validated TOML configuration, defaults, precedence and example file.
+- [x] DS-005: Introduce Tokio tasks, bounded channels, progress and cancellation; prove navigation stays responsive.
+- [x] DS-006: Add validated TOML configuration, defaults, precedence and example file.
 - [ ] DS-007: Add destructive-action confirmation and read-only context enforcement.
 
 ## P1
