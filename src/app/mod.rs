@@ -1,7 +1,7 @@
 use crate::{
     docker::{
         CommandSpec,
-        client::{ContainerLifecycle, ContainerRow, DashboardData},
+        client::{ContainerLifecycle, ContainerRow, DashboardData, ImageRow},
     },
     security::Mutation,
     tasks::TaskRequest,
@@ -138,6 +138,8 @@ pub struct App {
     pub(crate) current_tab: Tab,
     pub(crate) container_actions: Vec<ContainerAction>,
     pub(crate) image_actions: Vec<ImageAction>,
+    pub(crate) images: Vec<ImageRow>,
+    pub(crate) image_table_state: ratatui::widgets::TableState,
     pub(crate) network_actions: Vec<NetworkAction>,
     pub(crate) volume_actions: Vec<VolumeAction>,
     pub(crate) project_actions: Vec<ProjectAction>,
@@ -208,6 +210,8 @@ impl App {
                 ImageAction::Load,
                 ImageAction::History,
             ],
+            images: Vec::new(),
+            image_table_state: ratatui::widgets::TableState::default(),
             network_actions: vec![
                 NetworkAction::List,
                 NetworkAction::Create,
@@ -286,6 +290,15 @@ impl App {
             } else {
                 Some(0)
             });
+    }
+
+    pub fn set_images(&mut self, images: Vec<ImageRow>) {
+        self.images = images;
+        self.image_table_state.select(if self.images.is_empty() {
+            None
+        } else {
+            Some(0)
+        });
     }
 
     pub fn toggle_container_focus(&mut self) {
@@ -827,9 +840,7 @@ impl App {
                 "Tag y contexto (ej: myimage .):",
                 PendingAction::ImageRebuild,
             ),
-            ImageAction::List => {
-                self.execute_command(CommandSpec::new("docker").args(["image", "list"]))
-            }
+            ImageAction::List => Some(TaskRequest::ListImages),
             ImageAction::Remove => self.start_input(
                 "Imagen a eliminar (ID o nombre):",
                 PendingAction::ImageRemove,
@@ -1144,5 +1155,16 @@ mod tests {
         let request = app.confirm_input().expect("compose profile request");
 
         assert_eq!(request.mutation(), Mutation::Mutating);
+    }
+
+    #[test]
+    fn image_list_action_requests_bollard_image_listing() {
+        let mut app = App::new();
+        app.current_tab = Tab::Image;
+        app.image_list_state.select(Some(2));
+
+        let request = app.execute_selected().expect("image list request");
+
+        assert!(matches!(request, TaskRequest::ListImages));
     }
 }
