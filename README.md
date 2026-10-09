@@ -13,10 +13,12 @@ Completed:
   - `src/app/` application state and actions
   - `src/docker/` Docker command execution
   - `src/tui/` terminal rendering
+- DS-003 RAII terminal guard with terminal restoration tests
+- DS-004 explicit argument execution with metacharacter and spaced-path tests
 
 The current TUI preserves the original tabbed interface for containers, images, networks, volumes, projects, machines, and help.
 
-> Important: Docker operations are still synchronous and currently execute through `sh -c`. This is a known Phase 1 risk and is scheduled for replacement in DS-004/DS-005. Do not use this version for untrusted input or destructive production operations.
+> Important: Docker operations are still synchronous. Async task execution is scheduled for DS-005, and destructive actions still need confirmation and read-only policy enforcement.
 
 ## Requirements
 
