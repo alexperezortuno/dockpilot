@@ -1,4 +1,4 @@
-# Docker Simplifier v2 — Roadmap
+# Dockpilot v2 — Roadmap
 
 ## Phase 0: Specification
 Deliver AGENTS.md, SPEC.md, ARCHITECTURE.md, ROADMAP.md, TASKS.md.

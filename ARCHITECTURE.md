@@ -1,4 +1,4 @@
-# Docker Simplifier v2 — Architecture
+# Dockpilot v2 — Architecture
 
 ## Layers
 TUI (ratatui/crossterm) -> application state/actions/events -> Docker-specific services -> Bollard (Engine API) or official `docker compose` CLI.
