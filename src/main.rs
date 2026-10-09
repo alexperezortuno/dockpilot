@@ -199,7 +199,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         (KeyCode::Char('u'), _) => Some(TaskRequest::DiskUsage { preview: false }),
                         (KeyCode::Char('k'), _) => Some(TaskRequest::DiskUsage { preview: true }),
                         (KeyCode::Char('f'), _) => {
-                            app.start_container_filter();
+                            app.start_filter();
                             None
                         }
                         (KeyCode::Char(key), _) if key == shortcuts.toggle_focus => {
