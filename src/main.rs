@@ -48,7 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::with_project_folder(config.project_folder);
-    let engine_connection = EngineConnection::connect().await;
+    let engine_connection = EngineConnection::connect(config.docker_context.as_deref()).await;
     let engine_status = engine_connection.status_message();
     let engine_status_display = engine_connection.status().to_string();
     let engine_client = engine_connection.into_client();
@@ -175,7 +175,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             None
                         }
                         (KeyCode::Char('m'), _) => {
-                            app.toggle_container_focus();
+                            app.toggle_focus();
                             None
                         }
                         (KeyCode::Char('s'), _) => {
