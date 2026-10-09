@@ -1,5 +1,8 @@
 use bollard::query_parameters::StatsOptionsBuilder;
-use bollard::{Docker, query_parameters::ListContainersOptionsBuilder};
+use bollard::{
+    Docker,
+    query_parameters::{ListContainersOptionsBuilder, ListImagesOptionsBuilder},
+};
 use futures_util::StreamExt;
 use std::fmt;
 use tokio::time::{Duration, timeout};
@@ -37,6 +40,13 @@ pub struct ContainerRow {
     pub image: String,
     pub state: String,
     pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageRow {
+    pub id: String,
+    pub tag: String,
+    pub size: i64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -104,6 +114,32 @@ pub async fn list_containers(client: &Docker) -> Result<Vec<ContainerRow>, Strin
                 .map(|state| format!("{state:?}"))
                 .unwrap_or_else(|| "unknown".to_string()),
             status: container.status.unwrap_or_else(|| "-".to_string()),
+        })
+        .collect())
+}
+
+pub async fn list_images(client: &Docker) -> Result<Vec<ImageRow>, String> {
+    let options = ListImagesOptionsBuilder::new().all(true).build();
+    let images = client
+        .list_images(Some(options))
+        .await
+        .map_err(|error| error.to_string())?;
+
+    Ok(images
+        .into_iter()
+        .map(|image| ImageRow {
+            id: image
+                .id
+                .trim_start_matches("sha256:")
+                .chars()
+                .take(12)
+                .collect(),
+            tag: image
+                .repo_tags
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "<none>".to_string()),
+            size: image.size,
         })
         .collect())
 }
