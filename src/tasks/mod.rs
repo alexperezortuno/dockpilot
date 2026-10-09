@@ -1,6 +1,11 @@
 use crate::{
     docker::{
-        CommandSpec, client::ContainerRow, client::list_containers, run_command, run_stop_all,
+        CommandSpec,
+        client::{
+            ContainerLifecycle, ContainerRow, apply_container_lifecycle, inspect_container,
+            list_containers,
+        },
+        run_command, run_stop_all,
     },
     security::Mutation,
 };
@@ -13,6 +18,13 @@ pub enum TaskRequest {
     },
     StopAll,
     ListContainers,
+    InspectContainer {
+        id: String,
+    },
+    ContainerLifecycle {
+        id: String,
+        operation: ContainerLifecycle,
+    },
 }
 
 impl TaskRequest {
@@ -21,6 +33,14 @@ impl TaskRequest {
             Self::Command { mutation, .. } => *mutation,
             Self::StopAll => Mutation::Destructive,
             Self::ListContainers => Mutation::ReadOnly,
+            Self::InspectContainer { .. } => Mutation::ReadOnly,
+            Self::ContainerLifecycle { operation, .. } => {
+                if *operation == ContainerLifecycle::Remove {
+                    Mutation::Destructive
+                } else {
+                    Mutation::Mutating
+                }
+            }
         }
     }
 
@@ -29,6 +49,10 @@ impl TaskRequest {
             Self::Command { spec, .. } => spec.display(),
             Self::StopAll => "detener todos los contenedores".to_string(),
             Self::ListContainers => "listar contenedores".to_string(),
+            Self::InspectContainer { id } => format!("inspeccionar contenedor {}", id),
+            Self::ContainerLifecycle { id, operation } => {
+                format!("{} contenedor {}", operation.label(), id)
+            }
         }
     }
 }
@@ -97,6 +121,10 @@ impl TaskManager {
                 TaskRequest::Command { spec, .. } => format!("ejecutando: {}", spec.display()),
                 TaskRequest::StopAll => "deteniendo contenedores activos".to_string(),
                 TaskRequest::ListContainers => "consultando contenedores".to_string(),
+                TaskRequest::InspectContainer { id } => format!("inspeccionando {}", id),
+                TaskRequest::ContainerLifecycle { id, operation } => {
+                    format!("{} contenedor {}", operation.label(), id)
+                }
             };
             if sender
                 .send(TaskEvent::Progress {
@@ -152,6 +180,71 @@ impl TaskManager {
                             .await;
                     }
                 },
+                TaskRequest::InspectContainer { id: container_id } => match client {
+                    Some(client) => match inspect_container(&client, &container_id).await {
+                        Ok(lines) => {
+                            let _ = sender.send(TaskEvent::Finished { id, lines }).await;
+                        }
+                        Err(error) => {
+                            let _ = sender
+                                .send(TaskEvent::Finished {
+                                    id,
+                                    lines: vec![
+                                        format!("[docker] inspect failed: {}", error),
+                                        String::new(),
+                                    ],
+                                })
+                                .await;
+                        }
+                    },
+                    None => {
+                        let _ = sender
+                            .send(TaskEvent::Finished {
+                                id,
+                                lines: vec![
+                                    "[docker] Engine disconnected; cannot inspect container"
+                                        .to_string(),
+                                    String::new(),
+                                ],
+                            })
+                            .await;
+                    }
+                },
+                TaskRequest::ContainerLifecycle {
+                    id: container_id,
+                    operation,
+                } => match client {
+                    Some(client) => {
+                        match apply_container_lifecycle(&client, &container_id, operation).await {
+                            Ok(lines) => {
+                                let _ = sender.send(TaskEvent::Finished { id, lines }).await;
+                            }
+                            Err(error) => {
+                                let _ = sender
+                                    .send(TaskEvent::Finished {
+                                        id,
+                                        lines: vec![
+                                            format!("[docker] lifecycle failed: {}", error),
+                                            String::new(),
+                                        ],
+                                    })
+                                    .await;
+                            }
+                        }
+                    }
+                    None => {
+                        let _ = sender
+                            .send(TaskEvent::Finished {
+                                id,
+                                lines: vec![
+                                    "[docker] Engine disconnected; cannot change container"
+                                        .to_string(),
+                                    String::new(),
+                                ],
+                            })
+                            .await;
+                    }
+                },
             }
         });
 
@@ -192,7 +285,10 @@ impl Drop for TaskManager {
 #[cfg(test)]
 mod tests {
     use super::{TaskManager, TaskRequest};
-    use crate::{docker::CommandSpec, security::Mutation};
+    use crate::{
+        docker::{CommandSpec, client::ContainerLifecycle},
+        security::Mutation,
+    };
 
     #[tokio::test]
     async fn manager_allows_one_active_task_and_cancels_it() {
@@ -208,5 +304,15 @@ mod tests {
         }));
         assert!(manager.cancel());
         assert!(!manager.cancel());
+    }
+
+    #[test]
+    fn removing_a_container_is_classified_as_destructive() {
+        let request = TaskRequest::ContainerLifecycle {
+            id: "container-id".to_string(),
+            operation: ContainerLifecycle::Remove,
+        };
+
+        assert_eq!(request.mutation(), Mutation::Destructive);
     }
 }
