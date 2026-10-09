@@ -37,6 +37,7 @@ impl CommandSpec {
         self
     }
 
+    #[allow(dead_code)]
     pub fn current_dir(mut self, path: impl Into<PathBuf>) -> Self {
         self.current_dir = Some(path.into());
         self
