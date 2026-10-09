@@ -122,6 +122,7 @@ pub struct App {
     pub(crate) machine_list_state: ListState,
     pub(crate) output_scroll: u16,
     pub(crate) project_folder: String,
+    pub(crate) engine_status: String,
     // Input mode
     pub(crate) input_mode: bool,
     pub(crate) input_buffer: String,
@@ -195,6 +196,7 @@ impl App {
             machine_list_state: ListState::default(),
             output_scroll: 0,
             project_folder,
+            engine_status: "checking Docker Engine".to_string(),
             input_mode: false,
             input_buffer: String::new(),
             input_prompt: String::new(),
@@ -219,6 +221,10 @@ impl App {
     pub fn append_output(&mut self, lines: impl IntoIterator<Item = String>) {
         self.output_lines.extend(lines);
         self.output_scroll = self.output_lines.len() as u16;
+    }
+
+    pub fn set_engine_status(&mut self, status: impl Into<String>) {
+        self.engine_status = status.into();
     }
 
     // --- Generic navigation ---
