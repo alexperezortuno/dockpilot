@@ -1,6 +1,7 @@
 mod app;
 mod config;
 mod docker;
+mod security;
 mod tasks;
 mod tui;
 
@@ -8,13 +9,42 @@ use app::App;
 use clap::Parser;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{Terminal, backend::CrosstermBackend};
+use security::SafetyPolicy;
 use std::{io, time::Duration};
-use tasks::{TaskEvent, TaskManager};
+use tasks::{TaskEvent, TaskManager, TaskRequest};
 use tui::terminal::TerminalGuard;
+
+fn dispatch_request(
+    app: &mut App,
+    task_manager: &mut TaskManager,
+    policy: SafetyPolicy,
+    pending_confirmation: &mut Option<TaskRequest>,
+    request: TaskRequest,
+    confirmed: bool,
+) {
+    let mutation = request.mutation();
+    let description = request.description();
+    if !policy.allows(mutation) {
+        app.push_output(format!(
+            "[bloqueado: contexto de solo lectura: {}]",
+            description
+        ));
+        return;
+    }
+    if !confirmed && policy.requires_confirmation(mutation) {
+        app.push_output(format!("[confirmación requerida: {} (y/n)]", description));
+        *pending_confirmation = Some(request);
+        return;
+    }
+    if !task_manager.spawn(request) {
+        app.push_output("[tarea ocupada: pulse x para cancelar]");
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = config::Config::load(&config::Cli::parse())?;
+    let policy = SafetyPolicy::new(config.safe_mode, config.read_only);
     let _terminal_guard = TerminalGuard::new()?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
@@ -22,6 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = App::with_project_folder(config.project_folder);
     let mut task_manager = TaskManager::new(32);
     let poll_interval = Duration::from_millis(config.poll_interval_ms);
+    let mut pending_confirmation: Option<TaskRequest> = None;
     let mut should_quit = false;
 
     while !should_quit {
@@ -47,66 +78,93 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 code, modifiers, ..
             }) = event::read()?
         {
-            let request = if app.input_mode {
-                // Input mode: characters go to the buffer
+            if pending_confirmation.is_some() {
                 match code {
-                    KeyCode::Enter => app.confirm_input(),
-                    KeyCode::Esc => {
-                        app.cancel_input();
-                        None
+                    KeyCode::Char('y') | KeyCode::Char('Y') => {
+                        if let Some(request) = pending_confirmation.take() {
+                            dispatch_request(
+                                &mut app,
+                                &mut task_manager,
+                                policy,
+                                &mut pending_confirmation,
+                                request,
+                                true,
+                            );
+                        }
                     }
-                    KeyCode::Backspace => {
-                        app.input_buffer.pop();
-                        None
+                    KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                        pending_confirmation = None;
+                        app.push_output("[acción cancelada]");
                     }
-                    KeyCode::Char(c) => {
-                        app.input_buffer.push(c);
-                        None
-                    }
-                    _ => None,
+                    _ => {}
                 }
             } else {
-                // Normal mode
-                match (code, modifiers) {
-                    (KeyCode::Char('q'), _) | (KeyCode::Esc, _) => {
-                        should_quit = true;
-                        None
-                    }
-                    (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
-                        should_quit = true;
-                        None
-                    }
-                    (KeyCode::Char('x'), _) => {
-                        if task_manager.cancel() {
-                            app.push_output("[tarea cancelada]");
+                let request = if app.input_mode {
+                    // Input mode: characters go to the buffer
+                    match code {
+                        KeyCode::Enter => app.confirm_input(),
+                        KeyCode::Esc => {
+                            app.cancel_input();
+                            None
                         }
-                        None
+                        KeyCode::Backspace => {
+                            app.input_buffer.pop();
+                            None
+                        }
+                        KeyCode::Char(c) => {
+                            app.input_buffer.push(c);
+                            None
+                        }
+                        _ => None,
                     }
-                    (KeyCode::Tab, _) => {
-                        app.next_tab();
-                        None
+                } else {
+                    // Normal mode
+                    match (code, modifiers) {
+                        (KeyCode::Char('q'), _) | (KeyCode::Esc, _) => {
+                            should_quit = true;
+                            None
+                        }
+                        (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                            should_quit = true;
+                            None
+                        }
+                        (KeyCode::Char('x'), _) => {
+                            if task_manager.cancel() {
+                                app.push_output("[tarea cancelada]");
+                            }
+                            None
+                        }
+                        (KeyCode::Tab, _) => {
+                            app.next_tab();
+                            None
+                        }
+                        (KeyCode::BackTab, _) => {
+                            app.previous_tab();
+                            None
+                        }
+                        (KeyCode::Up, _) => {
+                            app.previous();
+                            None
+                        }
+                        (KeyCode::Down, _) => {
+                            app.next();
+                            None
+                        }
+                        (KeyCode::Enter, _) => app.execute_selected(),
+                        _ => None,
                     }
-                    (KeyCode::BackTab, _) => {
-                        app.previous_tab();
-                        None
-                    }
-                    (KeyCode::Up, _) => {
-                        app.previous();
-                        None
-                    }
-                    (KeyCode::Down, _) => {
-                        app.next();
-                        None
-                    }
-                    (KeyCode::Enter, _) => app.execute_selected(),
-                    _ => None,
-                }
-            };
+                };
 
-            if let Some(request) = request
-                && !task_manager.spawn(request)
-            {
-                app.push_output("[tarea ocupada: pulse x para cancelar]");
+                if let Some(request) = request {
+                    dispatch_request(
+                        &mut app,
+                        &mut task_manager,
+                        policy,
+                        &mut pending_confirmation,
+                        request,
+                        false,
+                    );
+                }
             }
         }
     }
