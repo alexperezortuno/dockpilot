@@ -4,6 +4,7 @@ use bollard::{
     query_parameters::{ListContainersOptionsBuilder, ListImagesOptionsBuilder},
 };
 use futures_util::StreamExt;
+use serde::Serialize;
 use std::fmt;
 use tokio::process::Command;
 use tokio::time::{Duration, timeout};
@@ -35,7 +36,7 @@ pub struct EngineConnection {
     context: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ContainerRow {
     pub id: String,
     pub name: String,
@@ -44,14 +45,14 @@ pub struct ContainerRow {
     pub status: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ImageRow {
     pub id: String,
     pub tag: String,
     pub size: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NetworkRow {
     pub id: String,
     pub name: String,
@@ -59,14 +60,14 @@ pub struct NetworkRow {
     pub scope: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct VolumeRow {
     pub name: String,
     pub driver: String,
     pub mountpoint: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ContainerStats {
     pub id: String,
     pub cpu_percent: f64,
@@ -74,7 +75,7 @@ pub struct ContainerStats {
     pub memory_limit: u64,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DashboardData {
     pub engine_version: String,
     pub containers_total: i64,
