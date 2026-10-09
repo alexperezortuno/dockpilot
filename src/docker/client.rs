@@ -51,6 +51,21 @@ pub struct ImageRow {
     pub size: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetworkRow {
+    pub id: String,
+    pub name: String,
+    pub driver: String,
+    pub scope: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VolumeRow {
+    pub name: String,
+    pub driver: String,
+    pub mountpoint: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContainerStats {
     pub id: String,
@@ -142,6 +157,44 @@ pub async fn list_images(client: &Docker) -> Result<Vec<ImageRow>, String> {
                 .cloned()
                 .unwrap_or_else(|| "<none>".to_string()),
             size: image.size,
+        })
+        .collect())
+}
+
+pub async fn list_networks(client: &Docker) -> Result<Vec<NetworkRow>, String> {
+    let networks = client
+        .list_networks(None::<bollard::query_parameters::ListNetworksOptions>)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(networks
+        .into_iter()
+        .map(|network| NetworkRow {
+            id: network
+                .id
+                .unwrap_or_else(|| "-".to_string())
+                .chars()
+                .take(12)
+                .collect(),
+            name: network.name.unwrap_or_else(|| "-".to_string()),
+            driver: network.driver.unwrap_or_else(|| "-".to_string()),
+            scope: network.scope.unwrap_or_else(|| "-".to_string()),
+        })
+        .collect())
+}
+
+pub async fn list_volumes(client: &Docker) -> Result<Vec<VolumeRow>, String> {
+    let response = client
+        .list_volumes(None::<bollard::query_parameters::ListVolumesOptions>)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(response
+        .volumes
+        .unwrap_or_default()
+        .into_iter()
+        .map(|volume| VolumeRow {
+            name: volume.name,
+            driver: volume.driver,
+            mountpoint: volume.mountpoint,
         })
         .collect())
 }
