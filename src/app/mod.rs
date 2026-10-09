@@ -1,5 +1,8 @@
 use crate::{
-    docker::{CommandSpec, client::ContainerRow},
+    docker::{
+        CommandSpec,
+        client::{ContainerLifecycle, ContainerRow},
+    },
     security::Mutation,
     tasks::TaskRequest,
 };
@@ -11,6 +14,7 @@ pub enum ContainerAction {
     Start,
     StopAll,
     Stop,
+    Restart,
     ListAll,
     List,
     Logs,
@@ -98,6 +102,7 @@ pub enum PendingAction {
     ContainerRemove,
     ContainerCreate,
     ContainerFilter,
+    ContainerRestart,
     // Image
     ImageRemove,
     ImagePush,
@@ -162,6 +167,7 @@ impl App {
                 ContainerAction::Start,
                 ContainerAction::StopAll,
                 ContainerAction::Stop,
+                ContainerAction::Restart,
                 ContainerAction::ListAll,
                 ContainerAction::List,
                 ContainerAction::Logs,
@@ -498,16 +504,12 @@ impl App {
                     .args(["container", "diff"])
                     .arg(value),
             ),
-            PendingAction::ContainerPause => self.execute_mutating_command(
-                CommandSpec::new("docker")
-                    .args(["container", "pause"])
-                    .arg(value),
-            ),
-            PendingAction::ContainerUnpause => self.execute_mutating_command(
-                CommandSpec::new("docker")
-                    .args(["container", "unpause"])
-                    .arg(value),
-            ),
+            PendingAction::ContainerPause => {
+                self.execute_container_lifecycle(value, ContainerLifecycle::Pause)
+            }
+            PendingAction::ContainerUnpause => {
+                self.execute_container_lifecycle(value, ContainerLifecycle::Unpause)
+            }
             PendingAction::ContainerUpdate => self.execute_mutating_command(
                 CommandSpec::new("docker")
                     .args(["container", "update", "--memory=512m"])
@@ -518,9 +520,12 @@ impl App {
                     .args(["container", "wait"])
                     .arg(value),
             ),
-            PendingAction::ContainerRemove => self.execute_destructive_command(
-                CommandSpec::new("docker").args(["rm", "-f"]).arg(value),
-            ),
+            PendingAction::ContainerRemove => {
+                self.execute_container_lifecycle(value, ContainerLifecycle::Remove)
+            }
+            PendingAction::ContainerRestart => {
+                self.execute_container_lifecycle(value, ContainerLifecycle::Restart)
+            }
             PendingAction::ContainerCreate => {
                 // value = "image name" e.g. "test nginx"
                 let mut parts = value.splitn(2, ' ');
@@ -638,6 +643,17 @@ impl App {
         })
     }
 
+    fn execute_container_lifecycle(
+        &mut self,
+        id: &str,
+        operation: ContainerLifecycle,
+    ) -> Option<TaskRequest> {
+        Some(TaskRequest::ContainerLifecycle {
+            id: id.to_string(),
+            operation,
+        })
+    }
+
     fn execute_compose(&mut self, args: &[&str]) -> Option<TaskRequest> {
         let project_folder = self.project_folder.clone();
         self.execute_mutating_command(
@@ -653,6 +669,9 @@ impl App {
             ContainerAction::Start => self.execute_compose(&["compose", "up", "-d"]),
             ContainerAction::StopAll => Some(TaskRequest::StopAll),
             ContainerAction::Stop => self.execute_compose(&["compose", "stop"]),
+            ContainerAction::Restart => {
+                self.start_input("Contenedor a reiniciar:", PendingAction::ContainerRestart)
+            }
             ContainerAction::ListAll => {
                 self.execute_command(CommandSpec::new("docker").args(["ps", "-a"]))
             }
@@ -781,13 +800,13 @@ impl App {
         match self.current_tab {
             Tab::Container => {
                 if self.container_table_focus {
+                    let containers = self.filtered_containers();
                     if let Some(index) = self.container_table_state.selected()
-                        && let Some(container) = self.filtered_containers().get(index)
+                        && let Some(container) = containers.get(index)
                     {
-                        self.push_output(format!(
-                            "[container] {} | {} | {} | {}",
-                            container.name, container.image, container.state, container.status
-                        ));
+                        return Some(TaskRequest::InspectContainer {
+                            id: container.id.clone(),
+                        });
                     }
                     return None;
                 }
@@ -913,5 +932,24 @@ mod tests {
 
         assert_eq!(containers.len(), 1);
         assert_eq!(containers[0].name, "api");
+    }
+
+    #[test]
+    fn selected_container_enters_inspect_request() {
+        let mut app = App::new();
+        app.set_containers(vec![ContainerRow {
+            id: "container-id".to_string(),
+            name: "api".to_string(),
+            image: "image".to_string(),
+            state: "running".to_string(),
+            status: "Up".to_string(),
+        }]);
+
+        let request = app.execute_selected().expect("selected container request");
+
+        assert!(matches!(
+            request,
+            TaskRequest::InspectContainer { id } if id == "container-id"
+        ));
     }
 }
