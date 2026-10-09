@@ -139,9 +139,11 @@ pub struct App {
     pub(crate) network_actions: Vec<NetworkAction>,
     pub(crate) networks: Vec<NetworkRow>,
     pub(crate) network_table_state: ratatui::widgets::TableState,
+    pub(crate) network_table_focus: bool,
     pub(crate) volume_actions: Vec<VolumeAction>,
     pub(crate) volumes: Vec<VolumeRow>,
     pub(crate) volume_table_state: ratatui::widgets::TableState,
+    pub(crate) volume_table_focus: bool,
     pub(crate) project_actions: Vec<ProjectAction>,
     pub(crate) output_lines: VecDeque<String>,
     pub(crate) output_capacity: usize,
@@ -220,6 +222,7 @@ impl App {
             ],
             networks: Vec::new(),
             network_table_state: ratatui::widgets::TableState::default(),
+            network_table_focus: false,
             volume_actions: vec![
                 VolumeAction::List,
                 VolumeAction::Create,
@@ -227,6 +230,7 @@ impl App {
             ],
             volumes: Vec::new(),
             volume_table_state: ratatui::widgets::TableState::default(),
+            volume_table_focus: false,
             project_actions: vec![
                 ProjectAction::SetFolder,
                 ProjectAction::ComposeUp,
@@ -260,7 +264,7 @@ impl App {
             pending_action: None,
         };
 
-        app.container_list_state.select(Some(1));
+        app.container_list_state.select(Some(0));
         app.image_list_state.select(Some(0));
         app.network_list_state.select(Some(0));
         app.volume_list_state.select(Some(0));
@@ -328,6 +332,8 @@ impl App {
         match self.current_tab {
             Tab::Container => self.toggle_container_focus(),
             Tab::Image => self.image_table_focus = !self.image_table_focus,
+            Tab::Network => self.network_table_focus = !self.network_table_focus,
+            Tab::Volume => self.volume_table_focus = !self.volume_table_focus,
             _ => {}
         }
     }
@@ -476,10 +482,18 @@ impl App {
                 }
             }
             Tab::Network => {
-                Self::next_in_list(&mut self.network_list_state, self.network_actions.len())
+                if self.network_table_focus {
+                    Self::next_in_table(&mut self.network_table_state, self.networks.len());
+                } else {
+                    Self::next_in_list(&mut self.network_list_state, self.network_actions.len());
+                }
             }
             Tab::Volume => {
-                Self::next_in_list(&mut self.volume_list_state, self.volume_actions.len())
+                if self.volume_table_focus {
+                    Self::next_in_table(&mut self.volume_table_state, self.volumes.len());
+                } else {
+                    Self::next_in_list(&mut self.volume_list_state, self.volume_actions.len());
+                }
             }
             Tab::Project => {
                 Self::next_in_list(&mut self.project_list_state, self.project_actions.len())
@@ -510,10 +524,21 @@ impl App {
                 }
             }
             Tab::Network => {
-                Self::previous_in_list(&mut self.network_list_state, self.network_actions.len())
+                if self.network_table_focus {
+                    Self::previous_in_table(&mut self.network_table_state, self.networks.len());
+                } else {
+                    Self::previous_in_list(
+                        &mut self.network_list_state,
+                        self.network_actions.len(),
+                    );
+                }
             }
             Tab::Volume => {
-                Self::previous_in_list(&mut self.volume_list_state, self.volume_actions.len())
+                if self.volume_table_focus {
+                    Self::previous_in_table(&mut self.volume_table_state, self.volumes.len());
+                } else {
+                    Self::previous_in_list(&mut self.volume_list_state, self.volume_actions.len());
+                }
             }
             Tab::Project => {
                 Self::previous_in_list(&mut self.project_list_state, self.project_actions.len())
@@ -951,6 +976,17 @@ impl App {
                 None
             }
             Tab::Network => {
+                if self.network_table_focus {
+                    if let Some(index) = self.network_table_state.selected()
+                        && let Some(network) = self.networks.get(index)
+                    {
+                        self.push_output(format!(
+                            "[network] {} | {} | {}",
+                            network.name, network.driver, network.scope
+                        ));
+                    }
+                    return None;
+                }
                 if let Some(i) = self.network_list_state.selected()
                     && let Some(action) = self.network_actions.get(i).cloned()
                 {
@@ -959,6 +995,17 @@ impl App {
                 None
             }
             Tab::Volume => {
+                if self.volume_table_focus {
+                    if let Some(index) = self.volume_table_state.selected()
+                        && let Some(volume) = self.volumes.get(index)
+                    {
+                        self.push_output(format!(
+                            "[volume] {} | {} | {}",
+                            volume.name, volume.driver, volume.mountpoint
+                        ));
+                    }
+                    return None;
+                }
                 if let Some(i) = self.volume_list_state.selected()
                     && let Some(action) = self.volume_actions.get(i).cloned()
                 {
@@ -1200,6 +1247,15 @@ mod tests {
             app.execute_selected(),
             Some(TaskRequest::ListNetworks)
         ));
+        app.set_networks(vec![NetworkRow {
+            id: "net-id".to_string(),
+            name: "bridge".to_string(),
+            driver: "bridge".to_string(),
+            scope: "local".to_string(),
+        }]);
+        app.toggle_focus();
+        app.execute_selected();
+        assert!(app.network_table_focus);
 
         app.current_tab = Tab::Volume;
         app.volume_list_state.select(Some(0));
@@ -1207,5 +1263,13 @@ mod tests {
             app.execute_selected(),
             Some(TaskRequest::ListVolumes)
         ));
+        app.set_volumes(vec![VolumeRow {
+            name: "data".to_string(),
+            driver: "local".to_string(),
+            mountpoint: "/var/lib/data".to_string(),
+        }]);
+        app.toggle_focus();
+        app.execute_selected();
+        assert!(app.volume_table_focus);
     }
 }
