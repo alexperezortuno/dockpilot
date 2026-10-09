@@ -1,4 +1,5 @@
 use crate::{
+    config::ThemeName,
     docker::{
         CommandSpec,
         client::{ContainerLifecycle, ContainerRow, DashboardData, ImageRow},
@@ -155,6 +156,7 @@ pub struct App {
     pub(crate) output_scroll: u16,
     pub(crate) project_folder: String,
     pub(crate) engine_status: String,
+    pub(crate) theme: ThemeName,
     pub(crate) dashboard: Option<DashboardData>,
     pub(crate) log_lines: VecDeque<String>,
     pub(crate) log_filter: String,
@@ -249,6 +251,7 @@ impl App {
             output_scroll: 0,
             project_folder,
             engine_status: "checking Docker Engine".to_string(),
+            theme: ThemeName::Dark,
             dashboard: None,
             log_lines: VecDeque::new(),
             log_filter: String::new(),
@@ -357,6 +360,19 @@ impl App {
 
     pub fn set_engine_status(&mut self, status: impl Into<String>) {
         self.engine_status = status.into();
+    }
+
+    pub fn set_theme(&mut self, theme: ThemeName) {
+        self.theme = theme;
+    }
+
+    pub fn cycle_theme(&mut self) -> ThemeName {
+        self.theme = match self.theme {
+            ThemeName::Dark => ThemeName::Light,
+            ThemeName::Light => ThemeName::Mono,
+            ThemeName::Mono => ThemeName::Dark,
+        };
+        self.theme
     }
 
     pub fn set_dashboard(&mut self, dashboard: DashboardData) {
