@@ -252,7 +252,7 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
                 "  Enter           - Execute / prompt for parameter",
                 "  x               - Cancel active task",
                 "  r               - Refresh containers",
-                "  f               - Filter containers",
+                "  f               - Filter current table",
                 "  m               - Toggle table/actions focus",
                 "  s               - Cycle container sort",
                 "  p               - Pause/resume log display",
@@ -339,7 +339,8 @@ fn draw_image_tab(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(72), Constraint::Percentage(28)])
         .split(area);
-    let rows = app.images.iter().map(|image| {
+    let images = app.filtered_images();
+    let rows = images.iter().map(|image| {
         Row::new([
             Cell::from(image.id.clone()),
             Cell::from(image.tag.clone()),
@@ -356,7 +357,13 @@ fn draw_image_tab(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
     )
     .header(Row::new(["ID", "Tag", "Size"]))
     .block(Block::default().borders(Borders::ALL).title(format!(
-        " Images | focus: {} ",
+        " Images ({}) | filter: {} | focus: {} ",
+        images.len(),
+        if app.image_filter.is_empty() {
+            "none"
+        } else {
+            &app.image_filter
+        },
         if app.image_table_focus {
             "table"
         } else {
@@ -405,7 +412,8 @@ fn draw_network_tab(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(72), Constraint::Percentage(28)])
         .split(area);
-    let rows = app.networks.iter().map(|network| {
+    let networks = app.filtered_networks();
+    let rows = networks.iter().map(|network| {
         Row::new([
             network.id.clone(),
             network.name.clone(),
@@ -424,7 +432,13 @@ fn draw_network_tab(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
     )
     .header(Row::new(["ID", "Name", "Driver", "Scope"]))
     .block(Block::default().borders(Borders::ALL).title(format!(
-        " Networks | focus: {} ",
+        " Networks ({}) | filter: {} | focus: {} ",
+        networks.len(),
+        if app.network_filter.is_empty() {
+            "none"
+        } else {
+            &app.network_filter
+        },
         if app.network_table_focus {
             "table"
         } else {
@@ -461,7 +475,8 @@ fn draw_volume_tab(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(72), Constraint::Percentage(28)])
         .split(area);
-    let rows = app.volumes.iter().map(|volume| {
+    let volumes = app.filtered_volumes();
+    let rows = volumes.iter().map(|volume| {
         Row::new([
             volume.name.clone(),
             volume.driver.clone(),
@@ -478,7 +493,13 @@ fn draw_volume_tab(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
     )
     .header(Row::new(["Name", "Driver", "Mountpoint"]))
     .block(Block::default().borders(Borders::ALL).title(format!(
-        " Volumes | focus: {} ",
+        " Volumes ({}) | filter: {} | focus: {} ",
+        volumes.len(),
+        if app.volume_filter.is_empty() {
+            "none"
+        } else {
+            &app.volume_filter
+        },
         if app.volume_table_focus {
             "table"
         } else {
