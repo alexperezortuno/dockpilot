@@ -6,6 +6,15 @@ project_folder = "."
 # Docker context name. Omit for the default context.
 # docker_context = "default"
 
+# Interface theme: dark, light, or mono.
+theme = "dark"
+
+[shortcuts]
+cancel_task = "x"
+toggle_focus = "m"
+refresh = "r"
+theme = "t"
+
 # TUI event polling interval. Valid range: 10..=5000 milliseconds.
 poll_interval_ms = 50
 
