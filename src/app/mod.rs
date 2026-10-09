@@ -49,6 +49,7 @@ pub enum ImageAction {
     Pull,
     Save,
     Load,
+    LoadViaSsh,
     History,
 }
 
@@ -122,6 +123,7 @@ pub enum PendingAction {
     ImagePull,
     ImageSave,
     ImageLoad,
+    ImageLoadViaSsh,
     ImageHistory,
     ImageBuild,
     ImageRebuild,
@@ -224,6 +226,7 @@ impl App {
                 ImageAction::Pull,
                 ImageAction::Save,
                 ImageAction::Load,
+                ImageAction::LoadViaSsh,
                 ImageAction::History,
             ],
             images: Vec::new(),
@@ -826,6 +829,7 @@ impl App {
                     CommandSpec::new("docker").args(["load"]).stdin_file(value),
                 )
             }
+            PendingAction::ImageLoadViaSsh => self.load_image_via_context(value),
             PendingAction::ImageHistory => {
                 self.execute_command(CommandSpec::new("docker").args(["history"]).arg(value))
             }
@@ -916,6 +920,26 @@ impl App {
             id: id.to_string(),
             operation,
         })
+    }
+
+    fn load_image_via_context(&mut self, value: &str) -> Option<TaskRequest> {
+        let Some((context, archive)) = value.split_once('|') else {
+            self.push_output("[image] use: docker-context|archive path");
+            return None;
+        };
+        let context = context.trim();
+        let archive = archive.trim();
+        if context.is_empty() || archive.is_empty() {
+            self.push_output("[image] Docker context and archive path are required");
+            return None;
+        }
+        self.execute_mutating_command(
+            CommandSpec::new("docker")
+                .args(["--context"])
+                .arg(context)
+                .args(["load"])
+                .stdin_file(archive),
+        )
     }
 
     fn volume_archive_command(&mut self, value: &str, restore: bool) -> Option<TaskRequest> {
@@ -1057,6 +1081,10 @@ impl App {
             ImageAction::Load => {
                 self.start_input("Ruta del tar (ej: image.tar):", PendingAction::ImageLoad)
             }
+            ImageAction::LoadViaSsh => self.start_input(
+                "Contexto Docker SSH y tar (contexto|ruta):",
+                PendingAction::ImageLoadViaSsh,
+            ),
             ImageAction::History => {
                 self.start_input("Imagen a inspeccionar:", PendingAction::ImageHistory)
             }
@@ -1449,6 +1477,19 @@ mod tests {
         let request = app.execute_selected().expect("image list request");
 
         assert!(matches!(request, TaskRequest::ListImages));
+    }
+
+    #[test]
+    fn image_ssh_load_action_creates_a_mutating_request() {
+        let mut app = App::new();
+        app.current_tab = Tab::Image;
+        app.image_list_state.select(Some(8));
+        app.execute_selected();
+        app.input_buffer = "remote-ssh|/tmp/image.tar".to_string();
+
+        let request = app.confirm_input().expect("SSH image load request");
+
+        assert_eq!(request.mutation(), Mutation::Mutating);
     }
 
     #[test]

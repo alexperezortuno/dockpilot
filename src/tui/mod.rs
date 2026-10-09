@@ -186,6 +186,7 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
                         ImageAction::Pull => "Pull Image",
                         ImageAction::Save => "Save Image to tar",
                         ImageAction::Load => "Load Image from tar",
+                        ImageAction::LoadViaSsh => "Load Image via SSH Context",
                         ImageAction::History => "View Image History",
                     };
                     ListItem::new(s)
@@ -388,6 +389,7 @@ fn draw_image_tab(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
             ImageAction::Pull => "Pull Image",
             ImageAction::Save => "Save Image to tar",
             ImageAction::Load => "Load Image from tar",
+            ImageAction::LoadViaSsh => "Load Image via SSH Context",
             ImageAction::History => "View Image History",
         };
         ListItem::new(label)
