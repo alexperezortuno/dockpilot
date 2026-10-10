@@ -5,6 +5,7 @@ mod security;
 mod tasks;
 mod tui;
 
+use app::task_history::TaskState;
 use app::{App, Overlay, Tab, notifications::NotificationKind};
 use clap::Parser;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
@@ -150,6 +151,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         while let Some(task_event) = task_manager.try_next() {
             match task_event {
                 TaskEvent::Started { id } => {
+                    app.queue_task(id, "background Docker operation".to_string());
+                    app.start_task(id);
                     app.set_task_status("running");
                     app.push_output(format!("[task {} started]", id));
                 }
@@ -158,6 +161,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     app.push_output(format!("[task {}] {}", id, message));
                 }
                 TaskEvent::Finished { id, lines } => {
+                    app.finish_task(id, TaskState::Completed);
                     app.set_task_status("idle");
                     let failed = lines.iter().any(|line| {
                         let line = line.to_lowercase();
