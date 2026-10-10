@@ -58,7 +58,9 @@ cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-Current validation includes 31 unit tests covering application navigation, JSON query dispatch, guarded volume backup dispatch, disk usage policy, bounded output/events/alerts, network/volume listing dispatch, theme and shortcut configuration, context endpoint parsing, image listing dispatch, Compose profile dispatch, dashboard requests, container filtering and inspection, bounded logs, configuration precedence, terminal restoration, safe command arguments, task cancellation, lifecycle policy, and engine status.
+Current validation includes 34 unit tests covering application navigation, UX layout/focus rendering, JSON query dispatch, guarded volume backup dispatch, disk usage policy, bounded output/events/alerts, network/volume listing dispatch, theme and shortcut configuration, context endpoint parsing, image listing dispatch, Compose profile dispatch, dashboard requests, container filtering and inspection, bounded logs, configuration precedence, terminal restoration, safe command arguments, task cancellation, lifecycle policy, and engine status.
+
+UX-001 uses `Tab`/`Shift+Tab` for pane focus and `Left`/`Right` for resource tabs. The current focus is shown in the footer and selected resource details appear beside focused tables.
 
 ## CI and Integration
 
@@ -121,9 +123,9 @@ Theme changes are cycled with the configured theme shortcut and saved to `dockpi
 
 | Key | Action |
 | --- | --- |
-| `Tab` | Next tab |
-| `Shift+Tab` | Previous tab |
-| `Up` / `Down` | Navigate actions |
+| `Tab` / `Shift+Tab` | Change focus |
+| `Left` / `Right` | Change resource tab |
+| `Up` / `Down` / `j` / `k` | Navigate focused component |
 | `Enter` | Execute selected action or prompt for a parameter |
 | `x` | Cancel the active background task |
 | `c` | Clear general output |
@@ -142,7 +144,8 @@ Theme changes are cycled with the configured theme shortcut and saved to `dockpi
 | `v` | Refresh volume listing |
 | `e` | Start or cancel Docker event streaming |
 | `u` | Show Docker disk usage |
-| `k` | Preview cleanup without mutating resources |
+| `K` | Preview cleanup without mutating resources |
+| `?` | Open contextual help |
 | `q` / `Esc` | Quit |
 | `Ctrl+C` | Quit |
 
@@ -178,7 +181,7 @@ src/
   app/          Application state, navigation, output buffering, input, and actions
   docker/       Docker command execution and Bollard engine connection
   tasks/        Tokio task manager and bounded task events
-  tui/          Ratatui rendering
+  tui/          Ratatui rendering, reusable layout, widgets, and screens
 ```
 
 The target architecture is:
