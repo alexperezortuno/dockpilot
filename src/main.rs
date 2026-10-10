@@ -125,16 +125,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         while let Some(task_event) = task_manager.try_next() {
             match task_event {
                 TaskEvent::Started { id } => {
+                    app.set_task_status("running");
                     app.push_output(format!("[task {} started]", id));
                 }
                 TaskEvent::Progress { id, message } => {
+                    app.set_task_status(message.clone());
                     app.push_output(format!("[task {}] {}", id, message));
                 }
                 TaskEvent::Finished { id, lines } => {
+                    app.set_task_status("idle");
                     app.append_output(lines);
                     task_manager.complete(id);
                 }
                 TaskEvent::Containers { id, containers } => {
+                    app.set_task_status("idle");
                     let count = containers.len();
                     app.set_containers(containers);
                     app.push_output(format!("[docker] loaded {} containers", count));
@@ -146,7 +150,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 TaskEvent::LogLine { line } => {
                     app.push_log_line(line);
                 }
+                TaskEvent::EventLine { line, alert } => {
+                    app.set_task_status("events");
+                    app.push_event(line, alert);
+                }
                 TaskEvent::Dashboard { id, data } => {
+                    app.set_task_status("idle");
                     app.set_dashboard(data);
                     task_manager.complete(id);
                     if task_manager.has_client() {
@@ -154,6 +163,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 TaskEvent::Images { id, images } => {
+                    app.set_task_status("idle");
                     let count = images.len();
                     app.set_images(images);
                     app.push_output(format!("[docker] loaded {} images", count));
@@ -163,6 +173,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 TaskEvent::Networks { id, networks } => {
+                    app.set_task_status("idle");
                     app.set_networks(networks);
                     task_manager.complete(id);
                     if task_manager.has_client() {
@@ -170,11 +181,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 TaskEvent::Volumes { id, volumes } => {
+                    app.set_task_status("idle");
                     app.set_volumes(volumes);
                     task_manager.complete(id);
-                }
-                TaskEvent::EventLine { line, alert } => {
-                    app.push_event(line, alert);
                 }
             }
         }
@@ -228,8 +237,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     // Normal mode
                     match (code, modifiers) {
-                        (KeyCode::Char('q'), _) | (KeyCode::Esc, _) => {
+                        (KeyCode::Char('q'), _) => {
                             should_quit = true;
+                            None
+                        }
+                        (KeyCode::Esc, _) => {
+                            if app.is_help() {
+                                app.previous_tab();
+                            } else {
+                                should_quit = true;
+                            }
                             None
                         }
                         (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
@@ -255,7 +272,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         (KeyCode::Char('v'), _) => Some(TaskRequest::ListVolumes),
                         (KeyCode::Char('e'), _) => Some(TaskRequest::Events),
                         (KeyCode::Char('u'), _) => Some(TaskRequest::DiskUsage { preview: false }),
-                        (KeyCode::Char('k'), _) => Some(TaskRequest::DiskUsage { preview: true }),
+                        (KeyCode::Char('K'), _) => Some(TaskRequest::DiskUsage { preview: true }),
                         (KeyCode::Char('f'), _) => {
                             app.start_filter();
                             None
@@ -280,12 +297,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             app.cycle_theme();
                             None
                         }
-                        (KeyCode::Tab, _) => {
+                        (KeyCode::Right, _) => {
                             app.next_tab();
                             None
                         }
-                        (KeyCode::BackTab, _) => {
+                        (KeyCode::Left, _) => {
                             app.previous_tab();
+                            None
+                        }
+                        (KeyCode::Tab, _) => {
+                            app.focus_next();
+                            None
+                        }
+                        (KeyCode::BackTab, _) => {
+                            app.focus_previous();
                             None
                         }
                         (KeyCode::Up, _) => {
@@ -294,6 +319,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         (KeyCode::Down, _) => {
                             app.next();
+                            None
+                        }
+                        (KeyCode::Char('j'), _) => {
+                            app.next();
+                            None
+                        }
+                        (KeyCode::Char('k'), _) => {
+                            app.previous();
+                            None
+                        }
+                        (KeyCode::Char('?'), _) => {
+                            app.show_help();
                             None
                         }
                         (KeyCode::PageUp, _) => {
