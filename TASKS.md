@@ -34,10 +34,10 @@
 
 ## UX
 - [x] UX-001: Responsive layout, explicit focus, contextual details, and adaptive TUI states.
-  - Renderizado extraído a `src/tui/screens/`.
-  - Widgets reutilizables para tablas, acciones, detalles, navegación y estados vacíos.
-  - Foco único y ordenado mediante `FocusTarget`, conservando `m`, `Tab`, `Shift+Tab` y la navegación de pestañas.
-   - Pruebas de renderizado para 120x40, 80x24, 60x20, 40x12 y 20x8, incluyendo actualización de detalles por selección.
+  - Rendering extracted to `src/tui/screens/`.
+  - Reusable widgets for tables, actions, details, navigation, and empty states.
+  - Single ordered focus through `FocusTarget`, preserving `m`, `Tab`, `Shift+Tab`, and tab navigation.
+    - Rendering tests for 120x40, 80x24, 60x20, 40x12, and 20x8, including selection-driven detail updates.
 - [x] UX-002: Advanced TUI interaction.
   - Command palette `:` with typed registry, incremental search, keyboard navigation, availability reasons, and safe dispatch.
   - Incremental resource search `/` for containers, images, networks, and volumes with filter restoration and ID-preserved selection.
