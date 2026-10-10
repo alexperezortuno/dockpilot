@@ -41,7 +41,11 @@ Completed:
   - `:` command palette with typed commands, availability reasons, and safe dispatch.
   - `/` incremental resource search with case-insensitive filtering and ID-preserved selection.
   - `a` context actions for selected Docker resources, using existing safety confirmation.
-  - bounded, expiring success/info/warning/error notifications.
+ - bounded, expiring success/info/warning/error notifications.
+- UX-003 visual observability foundations:
+  - elapsed-time CPU, memory, network and block-I/O samples in bounded circular buffers.
+  - periodic Bollard sampling with cancellation through the existing task manager and a CPU sparkline.
+  - configurable alert thresholds and cooldowns, colored log severity, and a bounded task summary.
 
 The current TUI provides dashboard, container, image, network, volume, project, and help tabs. Legacy Docker Machine support was removed; use Docker contexts for local, TCP, or SSH engines.
 
@@ -122,9 +126,11 @@ Supported environment variables and CLI flags:
 | Read-only mode | `DOCKPILOT_READ_ONLY` | `--read-only BOOL` |
 | Docker context | `DOCKPILOT_DOCKER_CONTEXT` | `--docker-context NAME` |
 | Theme | `config.toml` | `--theme dark|light|mono` |
+| Metrics interval/capacity | `config.toml` | `metrics_interval_ms` / `metrics_capacity` |
 
 Polling intervals must be between 10 and 5000 milliseconds, and the project folder must exist.
 Named Docker contexts are resolved through explicit `docker context inspect` arguments and support local, TCP, and SSH endpoints. Read-only mode applies equally to the selected local or remote context.
+Metrics are retained only for the configured circular capacity. Alert thresholds and cooldown use `alert_cpu_percent`, `alert_memory_percent`, and `alert_cooldown_seconds`; containers without a healthcheck are never inferred healthy.
 Theme changes are cycled with the configured theme shortcut and saved to `dockpilot.preferences.toml` on exit.
 
 ## Controls
@@ -149,6 +155,8 @@ Theme changes are cycled with the configured theme shortcut and saved to `dockpi
 | `m` | Toggle container table/actions focus |
 | `s` | Cycle container sort field |
 | `p` | Pause/resume log display |
+| `L` | Cycle minimum log severity filter |
+| `T` | Toggle Docker log timestamps for the next log request |
 | `d` | Refresh dashboard data |
 | `i` | Refresh image listing |
 | `t` | Cycle theme |
@@ -166,6 +174,8 @@ During a confirmation prompt, press `y` to continue or `n` / `Esc` to cancel.
 The `f` filter opens the existing parameter prompt. `/` applies an incremental filter to the current resource table (containers, images, networks, or volumes); `Enter` keeps it and `Esc` restores the previous filter. When a log stream is visible, `/` retains its existing log-line filtering behavior. `:` searches commands incrementally and `a` opens state-aware actions for the selected resource. To clear a resource filter, delete its search text and press `Enter`.
 
 Notifications are transient by default. Critical errors and pending safety confirmations remain visible until dismissed with `Backspace`; detailed task output remains in the bounded output history.
+
+Resource tabs do not auto-refresh one another. Images, networks, and volumes are refreshed only by their explicit actions; container metrics remain periodic while a container is selected.
 
 When the container table has focus, `Enter` inspects the selected container. Lifecycle mutations use Bollard and still pass through safe-mode confirmation and read-only policy checks.
 

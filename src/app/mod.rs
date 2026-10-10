@@ -3,7 +3,8 @@ use crate::{
     docker::{
         CommandSpec,
         client::{
-            ContainerLifecycle, ContainerRow, DashboardData, ImageRow, NetworkRow, VolumeRow,
+            ContainerLifecycle, ContainerRow, DashboardData, HealthSnapshot, ImageRow, NetworkRow,
+            VolumeRow,
         },
     },
     security::{Mutation, SafetyPolicy},
@@ -12,11 +13,21 @@ use crate::{
 use ratatui::widgets::ListState;
 use std::{collections::VecDeque, path::PathBuf};
 
+#[allow(dead_code)]
+pub mod alerts;
 pub mod commands;
+#[allow(dead_code)]
+pub mod health;
+#[allow(dead_code)]
+pub mod logs;
+#[allow(dead_code)]
+pub mod monitoring;
 mod navigation;
 pub mod notifications;
 mod output;
 pub mod search;
+#[allow(dead_code)]
+pub mod task_history;
 
 const MAX_LOG_LINES: usize = 2_000;
 const MAX_EVENT_LINES: usize = 500;
@@ -220,6 +231,8 @@ pub struct App {
     pub(crate) dashboard: Option<DashboardData>,
     pub(crate) log_lines: VecDeque<String>,
     pub(crate) log_filter: String,
+    pub(crate) log_level_filter: Option<logs::LogLevel>,
+    pub(crate) log_timestamps: bool,
     pub(crate) logs_paused: bool,
     pub(crate) event_lines: VecDeque<String>,
     pub(crate) alerts: VecDeque<String>,
@@ -235,6 +248,10 @@ pub struct App {
     pub(crate) overlay: Overlay,
     pub(crate) notifications: notifications::NotificationQueue,
     pub(crate) policy: SafetyPolicy,
+    pub(crate) task_history: task_history::TaskHistory,
+    pub(crate) metrics_history: monitoring::MetricsHistory,
+    pub(crate) latest_metrics: Option<monitoring::MetricSample>,
+    pub(crate) health: Option<HealthSnapshot>,
 }
 
 impl App {
@@ -327,6 +344,8 @@ impl App {
             dashboard: None,
             log_lines: VecDeque::new(),
             log_filter: String::new(),
+            log_level_filter: None,
+            log_timestamps: false,
             logs_paused: false,
             event_lines: VecDeque::new(),
             alerts: VecDeque::new(),
@@ -341,6 +360,10 @@ impl App {
             overlay: Overlay::None,
             notifications: notifications::NotificationQueue::default(),
             policy: SafetyPolicy::new(false, false),
+            task_history: task_history::TaskHistory::new(100),
+            metrics_history: monitoring::MetricsHistory::new(120),
+            latest_metrics: None,
+            health: None,
         };
 
         app.container_list_state.select(Some(0));
@@ -640,9 +663,14 @@ impl App {
             (Tab::Container, ContextAction::Inspect) => self
                 .selected_container_id()
                 .map(|id| TaskRequest::InspectContainer { id }),
-            (Tab::Container, ContextAction::Logs) => self
-                .selected_container_id()
-                .map(|id| TaskRequest::ContainerLogs { id, follow: true }),
+            (Tab::Container, ContextAction::Logs) => {
+                self.selected_container_id()
+                    .map(|id| TaskRequest::ContainerLogs {
+                        id,
+                        follow: true,
+                        timestamps: self.log_timestamps,
+                    })
+            }
             (Tab::Container, ContextAction::Start) => {
                 self.selected_container_id()
                     .map(|id| TaskRequest::ContainerLifecycle {
@@ -922,6 +950,17 @@ impl App {
         }
     }
 
+    pub fn current_tab_refresh_request(&self) -> Option<TaskRequest> {
+        match self.current_tab {
+            Tab::Dashboard => Some(self.dashboard_request()),
+            Tab::Container => Some(TaskRequest::ListContainers),
+            Tab::Image => Some(TaskRequest::ListImages),
+            Tab::Network => Some(TaskRequest::ListNetworks),
+            Tab::Volume => Some(TaskRequest::ListVolumes),
+            Tab::Project | Tab::Help => None,
+        }
+    }
+
     pub fn push_log_line(&mut self, line: String) {
         if self.logs_paused {
             return;
@@ -953,13 +992,56 @@ impl App {
         self.start_input("Filtro de logs:", PendingAction::LogFilter);
     }
 
+    pub fn cycle_log_level(&mut self) {
+        self.log_level_filter = match self.log_level_filter {
+            None => Some(logs::LogLevel::Debug),
+            Some(logs::LogLevel::Debug) => Some(logs::LogLevel::Info),
+            Some(logs::LogLevel::Info) => Some(logs::LogLevel::Warn),
+            Some(logs::LogLevel::Warn) => Some(logs::LogLevel::Error),
+            Some(logs::LogLevel::Error) => None,
+        };
+    }
+
+    pub fn toggle_log_timestamps(&mut self) {
+        self.log_timestamps = !self.log_timestamps;
+    }
+
     pub fn filtered_log_lines(&self) -> Vec<String> {
         let filter = self.log_filter.to_lowercase();
         self.log_lines
             .iter()
-            .filter(|line| filter.is_empty() || line.to_lowercase().contains(&filter))
+            .filter(|line| {
+                (filter.is_empty() || line.to_lowercase().contains(&filter))
+                    && logs::matches_level(line, self.log_level_filter)
+            })
             .cloned()
             .collect()
+    }
+
+    pub fn queue_task(&mut self, id: u64, description: String) {
+        self.task_history.queue(id, description);
+    }
+
+    pub fn start_task(&mut self, id: u64) {
+        self.task_history.start(id, std::time::Instant::now());
+    }
+
+    pub fn finish_task(&mut self, id: u64, state: task_history::TaskState) {
+        self.task_history
+            .finish(id, state, std::time::Instant::now());
+    }
+
+    pub fn record_metrics(&mut self, at: std::time::Instant, sample: monitoring::RawSample) {
+        self.latest_metrics = Some(self.metrics_history.push(at, sample));
+    }
+
+    pub fn reset_metrics(&mut self) {
+        self.metrics_history = monitoring::MetricsHistory::new(120);
+        self.latest_metrics = None;
+    }
+
+    pub fn set_health(&mut self, health: HealthSnapshot) {
+        self.health = Some(health);
     }
 
     // --- Generic navigation ---
@@ -1169,6 +1251,7 @@ impl App {
             PendingAction::ContainerLogs => Some(TaskRequest::ContainerLogs {
                 id: value.to_string(),
                 follow: true,
+                timestamps: self.log_timestamps,
             }),
             PendingAction::ContainerTop => self.execute_command(
                 CommandSpec::new("docker")
@@ -1999,6 +2082,26 @@ mod tests {
         assert_eq!(app.current_tab, Tab::Image);
         app.previous_tab();
         assert_eq!(app.current_tab, Tab::Container);
+    }
+
+    #[test]
+    fn entering_resource_tabs_requests_only_that_tab() {
+        let mut app = App::new();
+        app.next_tab();
+        assert_eq!(
+            app.current_tab_refresh_request().unwrap().description(),
+            "list images"
+        );
+        app.next_tab();
+        assert_eq!(
+            app.current_tab_refresh_request().unwrap().description(),
+            "list networks"
+        );
+        app.next_tab();
+        assert_eq!(
+            app.current_tab_refresh_request().unwrap().description(),
+            "list volumes"
+        );
     }
 
     #[test]

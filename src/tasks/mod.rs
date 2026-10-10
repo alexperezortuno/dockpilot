@@ -2,10 +2,12 @@ use crate::{
     docker::{
         CommandSpec,
         client::{
-            ContainerLifecycle, ContainerRow, DashboardData, ImageRow, NetworkRow, VolumeRow,
-            apply_container_lifecycle, dashboard_data, inspect_container, list_containers,
-            list_images, list_networks, list_volumes, start_all_containers,
+            ContainerLifecycle, ContainerRow, DashboardData, HealthSnapshot, ImageRow, NetworkRow,
+            VolumeRow, apply_container_lifecycle, container_health, dashboard_data,
+            inspect_container, list_containers, list_images, list_networks, list_volumes,
+            start_all_containers,
         },
+        metrics::container_stats,
         run_command, run_stop_all,
     },
     security::Mutation,
@@ -36,9 +38,16 @@ pub enum TaskRequest {
     ContainerLogs {
         id: String,
         follow: bool,
+        timestamps: bool,
     },
     Dashboard {
         selected_id: Option<String>,
+    },
+    Metrics {
+        id: String,
+    },
+    Health {
+        id: String,
     },
     DiskUsage {
         preview: bool,
@@ -65,6 +74,8 @@ impl TaskRequest {
             }
             Self::ContainerLogs { .. } => Mutation::ReadOnly,
             Self::Dashboard { .. } => Mutation::ReadOnly,
+            Self::Metrics { .. } => Mutation::ReadOnly,
+            Self::Health { .. } => Mutation::ReadOnly,
             Self::DiskUsage { .. } => Mutation::ReadOnly,
             Self::Events => Mutation::ReadOnly,
         }
@@ -83,10 +94,21 @@ impl TaskRequest {
             Self::ContainerLifecycle { id, operation } => {
                 format!("{} container {}", operation.label(), id)
             }
-            Self::ContainerLogs { id, follow } => {
-                format!("logs {}{}", id, if *follow { " (follow)" } else { "" })
+            Self::ContainerLogs {
+                id,
+                follow,
+                timestamps,
+            } => {
+                format!(
+                    "logs {}{}{}",
+                    id,
+                    if *follow { " (follow)" } else { "" },
+                    if *timestamps { " (timestamps)" } else { "" }
+                )
             }
             Self::Dashboard { .. } => "update dashboard".to_string(),
+            Self::Metrics { id } => format!("sample metrics for {}", id),
+            Self::Health { id } => format!("inspect health for {}", id),
             Self::DiskUsage { preview } => if *preview {
                 "preview cleanup"
             } else {
@@ -101,6 +123,7 @@ impl TaskRequest {
 pub enum TaskEvent {
     Started {
         id: u64,
+        description: String,
     },
     Progress {
         id: u64,
@@ -109,6 +132,13 @@ pub enum TaskEvent {
     Finished {
         id: u64,
         lines: Vec<String>,
+    },
+    Failed {
+        id: u64,
+        message: String,
+    },
+    Cancelled {
+        id: u64,
     },
     Containers {
         id: u64,
@@ -132,6 +162,15 @@ pub enum TaskEvent {
     Dashboard {
         id: u64,
         data: DashboardData,
+    },
+    Metrics {
+        id: u64,
+        container_id: String,
+        sample: crate::app::monitoring::RawSample,
+    },
+    Health {
+        id: u64,
+        snapshot: HealthSnapshot,
     },
     EventLine {
         line: String,
@@ -167,6 +206,10 @@ impl TaskManager {
         self.client.is_some()
     }
 
+    pub fn is_idle(&self) -> bool {
+        self.active.is_none()
+    }
+
     pub fn spawn(&mut self, request: TaskRequest) -> bool {
         if self.active.is_some() {
             return false;
@@ -177,7 +220,12 @@ impl TaskManager {
         let sender = self.sender.clone();
         let client = self.client.clone();
         let handle = tokio::spawn(async move {
-            if sender.send(TaskEvent::Started { id }).await.is_err() {
+            let description = request.description();
+            if sender
+                .send(TaskEvent::Started { id, description })
+                .await
+                .is_err()
+            {
                 return;
             }
 
@@ -193,10 +241,21 @@ impl TaskManager {
                 TaskRequest::ContainerLifecycle { id, operation } => {
                     format!("{} container {}", operation.label(), id)
                 }
-                TaskRequest::ContainerLogs { id, follow } => {
-                    format!("logs {}{}", id, if *follow { " (follow)" } else { "" })
+                TaskRequest::ContainerLogs {
+                    id,
+                    follow,
+                    timestamps,
+                } => {
+                    format!(
+                        "logs {}{}{}",
+                        id,
+                        if *follow { " (follow)" } else { "" },
+                        if *timestamps { " (timestamps)" } else { "" }
+                    )
                 }
                 TaskRequest::Dashboard { .. } => "updating dashboard".to_string(),
+                TaskRequest::Metrics { id } => format!("sampling metrics for {}", id),
+                TaskRequest::Health { id } => format!("inspecting health for {}", id),
                 TaskRequest::DiskUsage { preview } => if *preview {
                     "building cleanup preview"
                 } else {
@@ -218,16 +277,40 @@ impl TaskManager {
 
             match request {
                 TaskRequest::Command { spec, .. } => {
-                    let lines = run_command(spec).await.lines;
-                    let _ = sender.send(TaskEvent::Finished { id, lines }).await;
+                    let result = run_command(spec).await;
+                    if result.success {
+                        let _ = sender
+                            .send(TaskEvent::Finished {
+                                id,
+                                lines: result.lines,
+                            })
+                            .await;
+                    } else {
+                        let _ = sender
+                            .send(TaskEvent::Failed {
+                                id,
+                                message: "command exited unsuccessfully".to_string(),
+                            })
+                            .await;
+                    }
                 }
                 TaskRequest::StopAll => {
-                    let lines = run_stop_all()
-                        .await
+                    let results = run_stop_all().await;
+                    let success = results.iter().all(|result| result.success);
+                    let lines = results
                         .into_iter()
                         .flat_map(|result| result.lines)
                         .collect();
-                    let _ = sender.send(TaskEvent::Finished { id, lines }).await;
+                    if success {
+                        let _ = sender.send(TaskEvent::Finished { id, lines }).await;
+                    } else {
+                        let _ = sender
+                            .send(TaskEvent::Failed {
+                                id,
+                                message: "stop-all command failed".to_string(),
+                            })
+                            .await;
+                    }
                 }
                 TaskRequest::StartAll => match client {
                     Some(client) => match start_all_containers(&client).await {
@@ -445,12 +528,14 @@ impl TaskManager {
                 TaskRequest::ContainerLogs {
                     id: container_id,
                     follow,
+                    timestamps,
                 } => match client {
                     Some(client) => {
                         let options = LogsOptionsBuilder::new()
                             .follow(follow)
                             .stdout(true)
                             .stderr(true)
+                            .timestamps(timestamps)
                             .tail("200")
                             .build();
                         let mut stream = client.logs(&container_id, Some(options));
@@ -528,6 +613,60 @@ impl TaskManager {
                                         .to_string(),
                                     String::new(),
                                 ],
+                            })
+                            .await;
+                    }
+                },
+                TaskRequest::Metrics { id: container_id } => match client {
+                    Some(client) => match container_stats(&client, &container_id).await {
+                        Ok(sample) => {
+                            let _ = sender
+                                .send(TaskEvent::Metrics {
+                                    id,
+                                    container_id,
+                                    sample,
+                                })
+                                .await;
+                        }
+                        Err(error) => {
+                            let _ = sender
+                                .send(TaskEvent::Failed {
+                                    id,
+                                    message: format!("metrics failed: {}", error),
+                                })
+                                .await;
+                        }
+                    },
+                    None => {
+                        let _ = sender
+                            .send(TaskEvent::Failed {
+                                id,
+                                message: "Docker Engine disconnected; metrics unavailable"
+                                    .to_string(),
+                            })
+                            .await;
+                    }
+                },
+                TaskRequest::Health { id: container_id } => match client {
+                    Some(client) => match container_health(&client, &container_id).await {
+                        Ok(snapshot) => {
+                            let _ = sender.send(TaskEvent::Health { id, snapshot }).await;
+                        }
+                        Err(error) => {
+                            let _ = sender
+                                .send(TaskEvent::Failed {
+                                    id,
+                                    message: format!("health inspection failed: {}", error),
+                                })
+                                .await;
+                        }
+                    },
+                    None => {
+                        let _ = sender
+                            .send(TaskEvent::Failed {
+                                id,
+                                message: "Docker Engine disconnected; health unavailable"
+                                    .to_string(),
                             })
                             .await;
                     }
@@ -649,7 +788,8 @@ impl TaskManager {
     }
 
     pub fn cancel(&mut self) -> bool {
-        if let Some((_, handle)) = self.active.take() {
+        if let Some((id, handle)) = self.active.take() {
+            let _ = self.sender.try_send(TaskEvent::Cancelled { id });
             handle.abort();
             true
         } else {

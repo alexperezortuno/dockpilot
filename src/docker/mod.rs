@@ -1,4 +1,6 @@
 pub mod client;
+#[allow(dead_code)]
+pub mod metrics;
 
 use std::{ffi::OsString, fs::File, io, path::PathBuf, process::Stdio};
 use tokio::process::Command;

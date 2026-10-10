@@ -8,6 +8,7 @@ const MAX_POLL_INTERVAL_MS: u64 = 5_000;
 const DEFAULT_OUTPUT_CAPACITY: usize = 2_000;
 const MAX_OUTPUT_CAPACITY: usize = 100_000;
 const PREFERENCES_FILE: &str = "dockpilot.preferences.toml";
+const DEFAULT_METRICS_CAPACITY: usize = 120;
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq, Serialize, ValueEnum)]
 #[serde(rename_all = "lowercase")]
@@ -98,6 +99,11 @@ pub struct Config {
     pub docker_context: Option<String>,
     pub theme: ThemeName,
     pub shortcuts: Shortcuts,
+    pub metrics_interval_ms: u64,
+    pub metrics_capacity: usize,
+    pub alert_cpu_percent: Option<f64>,
+    pub alert_memory_percent: Option<f64>,
+    pub alert_cooldown_seconds: u64,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Serialize)]
@@ -110,6 +116,11 @@ struct PartialConfig {
     docker_context: Option<String>,
     theme: Option<ThemeName>,
     shortcuts: Option<PartialShortcuts>,
+    metrics_interval_ms: Option<u64>,
+    metrics_capacity: Option<usize>,
+    alert_cpu_percent: Option<f64>,
+    alert_memory_percent: Option<f64>,
+    alert_cooldown_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Serialize)]
@@ -148,6 +159,11 @@ impl Default for Config {
             docker_context: None,
             theme: ThemeName::default(),
             shortcuts: Shortcuts::default(),
+            metrics_interval_ms: 1000,
+            metrics_capacity: DEFAULT_METRICS_CAPACITY,
+            alert_cpu_percent: None,
+            alert_memory_percent: None,
+            alert_cooldown_seconds: 30,
         }
     }
 }
@@ -172,6 +188,11 @@ impl Config {
             docker_context: cli.docker_context.clone(),
             theme: cli.theme,
             shortcuts: None,
+            metrics_interval_ms: None,
+            metrics_capacity: None,
+            alert_cpu_percent: None,
+            alert_memory_percent: None,
+            alert_cooldown_seconds: None,
         };
 
         resolve_layers(
@@ -208,6 +229,11 @@ impl Config {
                 MAX_OUTPUT_CAPACITY
             )));
         }
+        if !(100..=60_000).contains(&self.metrics_interval_ms) || self.metrics_capacity == 0 {
+            return Err(ConfigError::new(
+                "metrics interval must be 100..=60000 ms and capacity must be positive",
+            ));
+        }
         if !self.project_folder.is_dir() {
             return Err(ConfigError::new(format!(
                 "project_folder is not a directory: {}",
@@ -240,6 +266,11 @@ fn environment_config() -> Result<PartialConfig, ConfigError> {
         docker_context: env::var("DOCKPILOT_DOCKER_CONTEXT").ok(),
         theme: None,
         shortcuts: None,
+        metrics_interval_ms: None,
+        metrics_capacity: None,
+        alert_cpu_percent: None,
+        alert_memory_percent: None,
+        alert_cooldown_seconds: None,
     })
 }
 
@@ -289,6 +320,21 @@ fn resolve_layers(
         }
         if let Some(shortcuts) = layer.shortcuts {
             apply_shortcuts(&mut config.shortcuts, shortcuts)?;
+        }
+        if let Some(value) = layer.metrics_interval_ms {
+            config.metrics_interval_ms = value;
+        }
+        if let Some(value) = layer.metrics_capacity {
+            config.metrics_capacity = value;
+        }
+        if let Some(value) = layer.alert_cpu_percent {
+            config.alert_cpu_percent = Some(value);
+        }
+        if let Some(value) = layer.alert_memory_percent {
+            config.alert_memory_percent = Some(value);
+        }
+        if let Some(value) = layer.alert_cooldown_seconds {
+            config.alert_cooldown_seconds = value;
         }
     }
     config.validate()?;
@@ -343,6 +389,11 @@ mod tests {
             docker_context: None,
             theme: ThemeName::Dark,
             shortcuts: Shortcuts::default(),
+            metrics_interval_ms: 1000,
+            metrics_capacity: super::DEFAULT_METRICS_CAPACITY,
+            alert_cpu_percent: None,
+            alert_memory_percent: None,
+            alert_cooldown_seconds: 30,
         };
         let file = PartialConfig {
             project_folder: Some(PathBuf::from(".")),
@@ -353,6 +404,11 @@ mod tests {
             docker_context: None,
             theme: None,
             shortcuts: None,
+            metrics_interval_ms: None,
+            metrics_capacity: None,
+            alert_cpu_percent: None,
+            alert_memory_percent: None,
+            alert_cooldown_seconds: None,
         };
         let environment = PartialConfig {
             project_folder: None,
@@ -363,6 +419,11 @@ mod tests {
             docker_context: None,
             theme: None,
             shortcuts: None,
+            metrics_interval_ms: None,
+            metrics_capacity: None,
+            alert_cpu_percent: None,
+            alert_memory_percent: None,
+            alert_cooldown_seconds: None,
         };
         let command_line = PartialConfig {
             project_folder: Some(PathBuf::from(".")),
@@ -373,6 +434,11 @@ mod tests {
             docker_context: None,
             theme: None,
             shortcuts: None,
+            metrics_interval_ms: None,
+            metrics_capacity: None,
+            alert_cpu_percent: None,
+            alert_memory_percent: None,
+            alert_cooldown_seconds: None,
         };
 
         let config = resolve_layers(
