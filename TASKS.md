@@ -51,6 +51,12 @@
   - Background tasks carry a typed origin and suppress successful periodic output/notifications.
   - `r` refreshes manually, `R` toggles auto-refresh, and resource intervals are validated in TOML.
   - Output/details visibility and compact layout can be toggled without changing keyboard navigation.
+- [x] UX-005: UI polish and stability.
+  - Conditional rendering consumes an application dirty flag; keyboard/task/notification changes invalidate it.
+  - Background refresh failures are grouped independently by resource/task description, with one recovery notification.
+  - Rotating background scheduling prevents metrics and healthchecks from starving behind list refreshes.
+  - Command palette navigation uses arrows; `j` and `k` remain text input, and task duration uses `finished - started`.
+  - Added dirty-render, task duration, independent refresh incident, palette input, identity selection, and terminal-size coverage.
 
 ## First agent assignment
 Implement DS-001 only. Inspect the repository, run baseline checks where available, and report shell interpolation, blocking subprocess calls, hardcoded parameters, broken output scrolling and Compose working-directory behavior. Do not refactor before reporting findings.
