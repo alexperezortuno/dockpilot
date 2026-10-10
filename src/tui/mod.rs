@@ -44,6 +44,8 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
     let layout = areas(
         f.area(),
         app.input_mode || matches!(app.overlay, crate::app::Overlay::Search(_)),
+        app.show_output,
+        app.compact_layout,
     );
     let colors = palette(app.theme);
     let tab_titles = [
@@ -80,7 +82,10 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
         );
     f.render_widget(tabs, layout.header);
     f.render_widget(
-        Paragraph::new(footer_line(app.focus_label(), &app.task_status)),
+        Paragraph::new(footer_line(
+            app.focus_label(),
+            &format!("{} | {}", app.task_status, app.refresh_status),
+        )),
         layout.footer,
     );
 
@@ -99,7 +104,9 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
     {
         widgets::input::draw(f, app, area);
     }
-    widgets::output::draw(f, app, layout.output);
+    if app.show_output {
+        widgets::output::draw(f, app, layout.output);
+    }
     if matches!(app.overlay, crate::app::Overlay::Search(_))
         && let Some(area) = layout.input
     {
@@ -245,6 +252,19 @@ mod tests {
             );
             let output = render(width, height, &mut app);
             assert!(output.contains("ready"));
+        }
+    }
+
+    #[test]
+    fn renders_compact_layout_without_output_or_details() {
+        for (width, height) in [(120, 40), (80, 24), (60, 20)] {
+            let mut app = App::new();
+            app.show_output = false;
+            app.show_details = false;
+            app.compact_layout = true;
+            let _ = render(width, height, &mut app);
+            app.focus_target = FocusTarget::Actions;
+            let _ = render(width, height, &mut app);
         }
     }
 }
