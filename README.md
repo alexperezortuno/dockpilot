@@ -32,6 +32,16 @@ Completed:
 - DS-019 read-only disk usage reporting and cleanup previews
 - DS-020 guarded volume backup/restore with consistency warnings
 - DS-021 noninteractive JSON query CLI
+- UX-001 responsive TUI completion:
+  - Screen rendering lives in `src/tui/screens/` and shared rendering patterns live in `src/tui/widgets/`.
+  - Resource focus is represented by one explicit, ordered `FocusTarget` instead of per-table toggles.
+  - Resource details follow the selected filtered row, including empty-resource states.
+   - Rendering is covered at 120x40, 80x24, 60x20, 40x12, and 20x8 terminal sizes.
+- UX-002 advanced TUI interaction:
+  - `:` command palette with typed commands, availability reasons, and safe dispatch.
+  - `/` incremental resource search with case-insensitive filtering and ID-preserved selection.
+  - `a` context actions for selected Docker resources, using existing safety confirmation.
+  - bounded, expiring success/info/warning/error notifications.
 
 The current TUI provides dashboard, container, image, network, volume, project, and help tabs. Legacy Docker Machine support was removed; use Docker contexts for local, TCP, or SSH engines.
 
@@ -58,7 +68,9 @@ cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-Current validation includes 31 unit tests covering application navigation, JSON query dispatch, guarded volume backup dispatch, disk usage policy, bounded output/events/alerts, network/volume listing dispatch, theme and shortcut configuration, context endpoint parsing, image listing dispatch, Compose profile dispatch, dashboard requests, container filtering and inspection, bounded logs, configuration precedence, terminal restoration, safe command arguments, task cancellation, lifecycle policy, and engine status.
+Current validation includes 38 unit tests covering application navigation, UX layout/focus rendering, JSON query dispatch, guarded volume backup dispatch, disk usage policy, bounded output/events/alerts, network/volume listing dispatch, theme and shortcut configuration, context endpoint parsing, image listing dispatch, Compose profile dispatch, dashboard requests, container filtering and inspection, bounded logs, configuration precedence, terminal restoration, safe command arguments, task cancellation, lifecycle policy, and engine status.
+
+UX-001 uses `Tab`/`Shift+Tab` for ordered pane focus and `Left`/`Right` for resource tabs. The `m` shortcut remains available for focus changes. The current focus is shown in the footer and selected resource details appear beside focused tables.
 
 ## CI and Integration
 
@@ -121,9 +133,9 @@ Theme changes are cycled with the configured theme shortcut and saved to `dockpi
 
 | Key | Action |
 | --- | --- |
-| `Tab` | Next tab |
-| `Shift+Tab` | Previous tab |
-| `Up` / `Down` | Navigate actions |
+| `Tab` / `Shift+Tab` | Change focus |
+| `Left` / `Right` | Change resource tab |
+| `Up` / `Down` / `j` / `k` | Navigate focused component |
 | `Enter` | Execute selected action or prompt for a parameter |
 | `x` | Cancel the active background task |
 | `c` | Clear general output |
@@ -131,10 +143,12 @@ Theme changes are cycled with the configured theme shortcut and saved to `dockpi
 | `Home` / `End` | Jump to output start/end |
 | `r` | Refresh the container table |
 | `f` | Filter/search containers |
+| `/` | Incrementally filter the current resource table |
+| `:` | Open the command palette |
+| `a` | Open actions for the selected resource |
 | `m` | Toggle container table/actions focus |
 | `s` | Cycle container sort field |
 | `p` | Pause/resume log display |
-| `/` | Filter log lines |
 | `d` | Refresh dashboard data |
 | `i` | Refresh image listing |
 | `t` | Cycle theme |
@@ -142,12 +156,16 @@ Theme changes are cycled with the configured theme shortcut and saved to `dockpi
 | `v` | Refresh volume listing |
 | `e` | Start or cancel Docker event streaming |
 | `u` | Show Docker disk usage |
-| `k` | Preview cleanup without mutating resources |
+| `K` | Preview cleanup without mutating resources |
+| `?` | Open contextual help |
+| `Backspace` | Dismiss the oldest notification |
 | `q` / `Esc` | Quit |
 | `Ctrl+C` | Quit |
 
 During a confirmation prompt, press `y` to continue or `n` / `Esc` to cancel.
-The `f` filter applies to the current resource table (containers, images, networks, or volumes). To clear it, open the filter prompt and press `Enter` with an empty value.
+The `f` filter opens the existing parameter prompt. `/` applies an incremental filter to the current resource table (containers, images, networks, or volumes); `Enter` keeps it and `Esc` restores the previous filter. When a log stream is visible, `/` retains its existing log-line filtering behavior. `:` searches commands incrementally and `a` opens state-aware actions for the selected resource. To clear a resource filter, delete its search text and press `Enter`.
+
+Notifications are transient by default. Critical errors and pending safety confirmations remain visible until dismissed with `Backspace`; detailed task output remains in the bounded output history.
 
 When the container table has focus, `Enter` inspects the selected container. Lifecycle mutations use Bollard and still pass through safe-mode confirmation and read-only policy checks.
 
@@ -178,7 +196,7 @@ src/
   app/          Application state, navigation, output buffering, input, and actions
   docker/       Docker command execution and Bollard engine connection
   tasks/        Tokio task manager and bounded task events
-  tui/          Ratatui rendering
+  tui/          Ratatui rendering, reusable layout, widgets, and screens
 ```
 
 The target architecture is:

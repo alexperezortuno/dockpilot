@@ -6,14 +6,17 @@ use crate::{
             ContainerLifecycle, ContainerRow, DashboardData, ImageRow, NetworkRow, VolumeRow,
         },
     },
-    security::Mutation,
+    security::{Mutation, SafetyPolicy},
     tasks::TaskRequest,
 };
 use ratatui::widgets::ListState;
 use std::{collections::VecDeque, path::PathBuf};
 
+pub mod commands;
 mod navigation;
+pub mod notifications;
 mod output;
+pub mod search;
 
 const MAX_LOG_LINES: usize = 2_000;
 const MAX_EVENT_LINES: usize = 500;
@@ -77,6 +80,25 @@ pub enum ProjectAction {
     ComposeConfig,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceKind {
+    Container,
+    Image,
+    Network,
+    Volume,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextAction {
+    Inspect,
+    Start,
+    Stop,
+    Restart,
+    Logs,
+    Remove,
+    History,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Tab {
     Dashboard,
@@ -86,6 +108,33 @@ pub enum Tab {
     Volume,
     Project,
     Help,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FocusTarget {
+    Table,
+    Actions,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Overlay {
+    None,
+    Palette { query: String, selected: usize },
+    Search(search::SearchState),
+    Context { selected: usize },
+}
+
+impl FocusTarget {
+    fn next(self) -> Self {
+        match self {
+            Self::Table => Self::Actions,
+            Self::Actions => Self::Table,
+        }
+    }
+
+    fn previous(self) -> Self {
+        self.next()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,22 +189,21 @@ pub enum PendingAction {
 
 pub struct App {
     pub(crate) current_tab: Tab,
+    pub(crate) focus_target: FocusTarget,
+    resource_focus: [FocusTarget; 4],
     pub(crate) container_actions: Vec<ContainerAction>,
     pub(crate) image_actions: Vec<ImageAction>,
     pub(crate) images: Vec<ImageRow>,
     pub(crate) image_filter: String,
     pub(crate) image_table_state: ratatui::widgets::TableState,
-    pub(crate) image_table_focus: bool,
     pub(crate) network_actions: Vec<NetworkAction>,
     pub(crate) networks: Vec<NetworkRow>,
     pub(crate) network_filter: String,
     pub(crate) network_table_state: ratatui::widgets::TableState,
-    pub(crate) network_table_focus: bool,
     pub(crate) volume_actions: Vec<VolumeAction>,
     pub(crate) volumes: Vec<VolumeRow>,
     pub(crate) volume_filter: String,
     pub(crate) volume_table_state: ratatui::widgets::TableState,
-    pub(crate) volume_table_focus: bool,
     pub(crate) project_actions: Vec<ProjectAction>,
     pub(crate) output_lines: VecDeque<String>,
     pub(crate) output_capacity: usize,
@@ -167,6 +215,7 @@ pub struct App {
     pub(crate) output_scroll: usize,
     pub(crate) project_folder: String,
     pub(crate) engine_status: String,
+    pub(crate) task_status: String,
     pub(crate) theme: ThemeName,
     pub(crate) dashboard: Option<DashboardData>,
     pub(crate) log_lines: VecDeque<String>,
@@ -176,7 +225,6 @@ pub struct App {
     pub(crate) alerts: VecDeque<String>,
     pub(crate) containers: Vec<ContainerRow>,
     pub(crate) container_table_state: ratatui::widgets::TableState,
-    pub(crate) container_table_focus: bool,
     pub(crate) container_filter: String,
     pub(crate) container_sort: ContainerSort,
     // Input mode
@@ -184,6 +232,9 @@ pub struct App {
     pub(crate) input_buffer: String,
     pub(crate) input_prompt: String,
     pub(crate) pending_action: Option<PendingAction>,
+    pub(crate) overlay: Overlay,
+    pub(crate) notifications: notifications::NotificationQueue,
+    pub(crate) policy: SafetyPolicy,
 }
 
 impl App {
@@ -197,6 +248,13 @@ impl App {
         let project_folder = project_folder.to_string_lossy().to_string();
         let mut app = App {
             current_tab: Tab::Container,
+            focus_target: FocusTarget::Table,
+            resource_focus: [
+                FocusTarget::Table,
+                FocusTarget::Actions,
+                FocusTarget::Actions,
+                FocusTarget::Actions,
+            ],
             container_actions: vec![
                 ContainerAction::StartAll,
                 ContainerAction::Start,
@@ -229,7 +287,6 @@ impl App {
             images: Vec::new(),
             image_filter: String::new(),
             image_table_state: ratatui::widgets::TableState::default(),
-            image_table_focus: false,
             network_actions: vec![
                 NetworkAction::List,
                 NetworkAction::Create,
@@ -238,7 +295,6 @@ impl App {
             networks: Vec::new(),
             network_filter: String::new(),
             network_table_state: ratatui::widgets::TableState::default(),
-            network_table_focus: false,
             volume_actions: vec![
                 VolumeAction::List,
                 VolumeAction::Create,
@@ -249,7 +305,6 @@ impl App {
             volumes: Vec::new(),
             volume_filter: String::new(),
             volume_table_state: ratatui::widgets::TableState::default(),
-            volume_table_focus: false,
             project_actions: vec![
                 ProjectAction::SetFolder,
                 ProjectAction::ComposeUp,
@@ -267,6 +322,7 @@ impl App {
             output_scroll: 0,
             project_folder,
             engine_status: "checking Docker Engine".to_string(),
+            task_status: "idle".to_string(),
             theme: ThemeName::Dark,
             dashboard: None,
             log_lines: VecDeque::new(),
@@ -276,13 +332,15 @@ impl App {
             alerts: VecDeque::new(),
             containers: Vec::new(),
             container_table_state: ratatui::widgets::TableState::default(),
-            container_table_focus: true,
             container_filter: String::new(),
             container_sort: ContainerSort::Name,
             input_mode: false,
             input_buffer: String::new(),
             input_prompt: String::new(),
             pending_action: None,
+            overlay: Overlay::None,
+            notifications: notifications::NotificationQueue::default(),
+            policy: SafetyPolicy::new(false, false),
         };
 
         app.container_list_state.select(Some(0));
@@ -333,55 +391,103 @@ impl App {
     }
 
     pub fn set_containers(&mut self, containers: Vec<ContainerRow>) {
+        let selected = self.selected_resource_id(ResourceKind::Container);
         self.containers = containers;
-        self.container_table_state
-            .select(if self.containers.is_empty() {
-                None
-            } else {
-                Some(0)
-            });
+        self.restore_selection(&selected, ResourceKind::Container);
     }
 
     pub fn set_images(&mut self, images: Vec<ImageRow>) {
+        let selected = self.selected_resource_id(ResourceKind::Image);
         self.images = images;
-        self.image_table_state.select(if self.images.is_empty() {
-            None
-        } else {
-            Some(0)
-        });
+        self.restore_selection(&selected, ResourceKind::Image);
     }
 
     pub fn set_networks(&mut self, networks: Vec<NetworkRow>) {
+        let selected = self.selected_resource_id(ResourceKind::Network);
         self.networks = networks;
-        self.network_table_state
-            .select(if self.networks.is_empty() {
-                None
-            } else {
-                Some(0)
-            });
+        self.restore_selection(&selected, ResourceKind::Network);
     }
 
     pub fn set_volumes(&mut self, volumes: Vec<VolumeRow>) {
+        let selected = self.selected_resource_id(ResourceKind::Volume);
         self.volumes = volumes;
-        self.volume_table_state.select(if self.volumes.is_empty() {
-            None
-        } else {
-            Some(0)
-        });
+        self.restore_selection(&selected, ResourceKind::Volume);
     }
 
-    pub fn toggle_focus(&mut self) {
-        match self.current_tab {
-            Tab::Container => self.toggle_container_focus(),
-            Tab::Image => self.image_table_focus = !self.image_table_focus,
-            Tab::Network => self.network_table_focus = !self.network_table_focus,
-            Tab::Volume => self.volume_table_focus = !self.volume_table_focus,
-            _ => {}
+    fn selected_resource_id(&self, kind: ResourceKind) -> Option<String> {
+        let index = match kind {
+            ResourceKind::Container => self.container_table_state.selected(),
+            ResourceKind::Image => self.image_table_state.selected(),
+            ResourceKind::Network => self.network_table_state.selected(),
+            ResourceKind::Volume => self.volume_table_state.selected(),
+        }?;
+        match kind {
+            ResourceKind::Container => self.filtered_containers().get(index).map(|r| r.id.clone()),
+            ResourceKind::Image => self.filtered_images().get(index).map(|r| r.id.clone()),
+            ResourceKind::Network => self.filtered_networks().get(index).map(|r| r.id.clone()),
+            ResourceKind::Volume => self.filtered_volumes().get(index).map(|r| r.name.clone()),
         }
     }
 
-    pub fn toggle_container_focus(&mut self) {
-        self.container_table_focus = !self.container_table_focus;
+    fn restore_selection(&mut self, selected: &Option<String>, kind: ResourceKind) {
+        let index = selected.as_ref().and_then(|id| match kind {
+            ResourceKind::Container => self.filtered_containers().iter().position(|r| &r.id == id),
+            ResourceKind::Image => self.filtered_images().iter().position(|r| &r.id == id),
+            ResourceKind::Network => self.filtered_networks().iter().position(|r| &r.id == id),
+            ResourceKind::Volume => self.filtered_volumes().iter().position(|r| &r.name == id),
+        });
+        let has_rows = match kind {
+            ResourceKind::Container => !self.filtered_containers().is_empty(),
+            ResourceKind::Image => !self.filtered_images().is_empty(),
+            ResourceKind::Network => !self.filtered_networks().is_empty(),
+            ResourceKind::Volume => !self.filtered_volumes().is_empty(),
+        };
+        let index = index.or(has_rows.then_some(0));
+        match kind {
+            ResourceKind::Container => self.container_table_state.select(index),
+            ResourceKind::Image => self.image_table_state.select(index),
+            ResourceKind::Network => self.network_table_state.select(index),
+            ResourceKind::Volume => self.volume_table_state.select(index),
+        }
+    }
+
+    pub fn toggle_focus(&mut self) {
+        self.focus_next();
+    }
+
+    fn resource_focus_index(tab: &Tab) -> Option<usize> {
+        match tab {
+            Tab::Container => Some(0),
+            Tab::Image => Some(1),
+            Tab::Network => Some(2),
+            Tab::Volume => Some(3),
+            _ => None,
+        }
+    }
+
+    fn sync_focus_target(&mut self) {
+        self.focus_target = Self::resource_focus_index(&self.current_tab)
+            .map(|index| self.resource_focus[index])
+            .unwrap_or(FocusTarget::Actions);
+    }
+
+    fn set_focus_target(&mut self, target: FocusTarget) {
+        self.focus_target = target;
+        if let Some(index) = Self::resource_focus_index(&self.current_tab) {
+            self.resource_focus[index] = target;
+        }
+    }
+
+    pub fn focus_next(&mut self) {
+        if Self::resource_focus_index(&self.current_tab).is_some() {
+            self.set_focus_target(self.focus_target.next());
+        }
+    }
+
+    pub fn focus_previous(&mut self) {
+        if Self::resource_focus_index(&self.current_tab).is_some() {
+            self.set_focus_target(self.focus_target.previous());
+        }
     }
 
     pub fn toggle_container_sort(&mut self) {
@@ -414,6 +520,191 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    pub fn start_search(&mut self) {
+        if let Some(filter) = self.current_filter() {
+            self.overlay = Overlay::Search(search::SearchState::new(filter));
+        }
+    }
+
+    pub fn search_push(&mut self, character: char) {
+        if let Overlay::Search(state) = &mut self.overlay {
+            state.query.push(character);
+            let query = state.query.clone();
+            self.set_current_filter(query);
+        }
+    }
+
+    pub fn search_backspace(&mut self) {
+        if let Overlay::Search(state) = &mut self.overlay {
+            state.query.pop();
+            let query = state.query.clone();
+            self.set_current_filter(query);
+        }
+    }
+
+    pub fn finish_search(&mut self) {
+        if matches!(self.overlay, Overlay::Search(_)) {
+            self.overlay = Overlay::None;
+        }
+    }
+
+    pub fn cancel_search(&mut self) {
+        if let Overlay::Search(state) = &self.overlay {
+            self.set_current_filter(state.previous_filter.clone());
+        }
+        self.overlay = Overlay::None;
+    }
+
+    fn current_filter(&self) -> Option<String> {
+        match self.current_tab {
+            Tab::Container => Some(self.container_filter.clone()),
+            Tab::Image => Some(self.image_filter.clone()),
+            Tab::Network => Some(self.network_filter.clone()),
+            Tab::Volume => Some(self.volume_filter.clone()),
+            _ => None,
+        }
+    }
+
+    fn set_current_filter(&mut self, filter: String) {
+        match self.current_tab {
+            Tab::Container => {
+                let selected = self.selected_resource_id(ResourceKind::Container);
+                self.container_filter = filter;
+                self.restore_selection(&selected, ResourceKind::Container);
+            }
+            Tab::Image => {
+                let selected = self.selected_resource_id(ResourceKind::Image);
+                self.image_filter = filter;
+                self.restore_selection(&selected, ResourceKind::Image);
+            }
+            Tab::Network => {
+                let selected = self.selected_resource_id(ResourceKind::Network);
+                self.network_filter = filter;
+                self.restore_selection(&selected, ResourceKind::Network);
+            }
+            Tab::Volume => {
+                let selected = self.selected_resource_id(ResourceKind::Volume);
+                self.volume_filter = filter;
+                self.restore_selection(&selected, ResourceKind::Volume);
+            }
+            _ => {}
+        }
+    }
+
+    pub fn start_palette(&mut self) {
+        commands::open_palette(self);
+    }
+
+    pub fn start_context_menu(&mut self) {
+        if self.focus_target == FocusTarget::Table && !self.context_actions().is_empty() {
+            self.overlay = Overlay::Context { selected: 0 };
+        }
+    }
+
+    pub fn context_actions(&self) -> Vec<ContextAction> {
+        match self.current_tab {
+            Tab::Container => {
+                let Some(index) = self.container_table_state.selected() else {
+                    return Vec::new();
+                };
+                let containers = self.filtered_containers();
+                let Some(container) = containers.get(index) else {
+                    return Vec::new();
+                };
+                let mut actions = vec![ContextAction::Inspect, ContextAction::Logs];
+                if container.state.eq_ignore_ascii_case("running") {
+                    actions.extend([ContextAction::Stop, ContextAction::Restart]);
+                } else {
+                    actions.push(ContextAction::Start);
+                }
+                actions.push(ContextAction::Remove);
+                actions
+            }
+            Tab::Image if self.selected_resource_id(ResourceKind::Image).is_some() => {
+                vec![ContextAction::History, ContextAction::Remove]
+            }
+            Tab::Network if self.selected_resource_id(ResourceKind::Network).is_some() => {
+                vec![ContextAction::Remove]
+            }
+            Tab::Volume if self.selected_resource_id(ResourceKind::Volume).is_some() => {
+                vec![ContextAction::Remove]
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    pub fn context_request(&mut self, action: ContextAction) -> Option<TaskRequest> {
+        let request = match (self.current_tab.clone(), action) {
+            (Tab::Container, ContextAction::Inspect) => self
+                .selected_container_id()
+                .map(|id| TaskRequest::InspectContainer { id }),
+            (Tab::Container, ContextAction::Logs) => self
+                .selected_container_id()
+                .map(|id| TaskRequest::ContainerLogs { id, follow: true }),
+            (Tab::Container, ContextAction::Start) => {
+                self.selected_container_id()
+                    .map(|id| TaskRequest::ContainerLifecycle {
+                        id,
+                        operation: ContainerLifecycle::Start,
+                    })
+            }
+            (Tab::Container, ContextAction::Stop) => {
+                self.selected_container_id()
+                    .map(|id| TaskRequest::ContainerLifecycle {
+                        id,
+                        operation: ContainerLifecycle::Stop,
+                    })
+            }
+            (Tab::Container, ContextAction::Restart) => {
+                self.selected_container_id()
+                    .map(|id| TaskRequest::ContainerLifecycle {
+                        id,
+                        operation: ContainerLifecycle::Restart,
+                    })
+            }
+            (Tab::Container, ContextAction::Remove) => {
+                self.selected_container_id()
+                    .map(|id| TaskRequest::ContainerLifecycle {
+                        id,
+                        operation: ContainerLifecycle::Remove,
+                    })
+            }
+            (Tab::Image, ContextAction::History) => {
+                self.selected_resource_id(ResourceKind::Image).map(|id| {
+                    self.execute_command(CommandSpec::new("docker").args(["history"]).arg(id))
+                        .unwrap()
+                })
+            }
+            (Tab::Image, ContextAction::Remove) => {
+                self.selected_resource_id(ResourceKind::Image).map(|id| {
+                    self.execute_destructive_command(
+                        CommandSpec::new("docker").args(["rmi"]).arg(id),
+                    )
+                    .unwrap()
+                })
+            }
+            (Tab::Network, ContextAction::Remove) => {
+                self.selected_resource_id(ResourceKind::Network).map(|id| {
+                    self.execute_destructive_command(
+                        CommandSpec::new("docker").args(["network", "rm"]).arg(id),
+                    )
+                    .unwrap()
+                })
+            }
+            (Tab::Volume, ContextAction::Remove) => {
+                self.selected_resource_id(ResourceKind::Volume).map(|id| {
+                    self.execute_destructive_command(
+                        CommandSpec::new("docker").args(["volume", "rm"]).arg(id),
+                    )
+                    .unwrap()
+                })
+            }
+            _ => None,
+        };
+        self.overlay = Overlay::None;
+        request
     }
 
     pub fn filtered_containers(&self) -> Vec<ContainerRow> {
@@ -487,6 +778,118 @@ impl App {
 
     pub fn set_engine_status(&mut self, status: impl Into<String>) {
         self.engine_status = status.into();
+    }
+
+    pub fn set_task_status(&mut self, status: impl Into<String>) {
+        self.task_status = status.into();
+    }
+
+    pub fn set_policy(&mut self, policy: SafetyPolicy) {
+        self.policy = policy;
+    }
+
+    pub fn tick(&mut self) {
+        self.notifications.tick();
+    }
+
+    pub fn notify(
+        &mut self,
+        kind: notifications::NotificationKind,
+        message: impl Into<String>,
+        persistent: bool,
+    ) {
+        self.notifications.push(kind, message, persistent);
+    }
+
+    pub fn dismiss_notification(&mut self) {
+        self.notifications.dismiss();
+    }
+
+    pub fn palette_query_push(&mut self, character: char) {
+        if let Overlay::Palette { query, selected } = &mut self.overlay {
+            query.push(character);
+            *selected = 0;
+        }
+    }
+
+    pub fn palette_query_backspace(&mut self) {
+        if let Overlay::Palette { query, selected } = &mut self.overlay {
+            query.pop();
+            *selected = 0;
+        }
+    }
+
+    pub fn palette_move(&mut self, delta: i32) {
+        let Overlay::Palette { query, .. } = &self.overlay else {
+            return;
+        };
+        let query = query.clone();
+        let count =
+            commands::filtered(&*self, &query, self.policy, self.task_status != "idle").len();
+        if count == 0 {
+            return;
+        }
+        let Overlay::Palette { selected, .. } = &mut self.overlay else {
+            return;
+        };
+        *selected = ((*selected as i32 + delta).rem_euclid(count as i32)) as usize;
+    }
+
+    pub fn palette_request(&mut self) -> Option<TaskRequest> {
+        let Overlay::Palette { query, selected } = &self.overlay else {
+            return None;
+        };
+        let entries = commands::filtered(self, query, self.policy, self.task_status != "idle");
+        let entry = entries.get(*selected)?;
+        if !entry.enabled {
+            self.notify(
+                notifications::NotificationKind::Warning,
+                entry
+                    .reason
+                    .clone()
+                    .unwrap_or_else(|| "acción no disponible".to_string()),
+                false,
+            );
+            return None;
+        }
+        let request = commands::request(self, entry.id);
+        if !matches!(self.overlay, Overlay::Search(_))
+            && !matches!(
+                entry.id,
+                commands::CommandId::Filter | commands::CommandId::ContextActions
+            )
+        {
+            self.overlay = Overlay::None;
+        }
+        request
+    }
+
+    pub fn context_move(&mut self, delta: i32) {
+        if !matches!(self.overlay, Overlay::Context { .. }) {
+            return;
+        }
+        let count = self.context_actions().len();
+        if count > 0 {
+            let Overlay::Context { selected } = &mut self.overlay else {
+                return;
+            };
+            *selected = ((*selected as i32 + delta).rem_euclid(count as i32)) as usize;
+        }
+    }
+
+    pub fn context_request_selected(&mut self) -> Option<TaskRequest> {
+        let Overlay::Context { selected } = self.overlay else {
+            return None;
+        };
+        let action = self.context_actions().get(selected).copied()?;
+        self.context_request(action)
+    }
+
+    pub fn focus_label(&self) -> &'static str {
+        match self.focus_target {
+            FocusTarget::Table => "table",
+            FocusTarget::Actions => "actions",
+        }
     }
 
     pub fn set_theme(&mut self, theme: ThemeName) {
@@ -580,7 +983,7 @@ impl App {
         match self.current_tab {
             Tab::Dashboard => {}
             Tab::Container => {
-                if self.container_table_focus {
+                if self.focus_target == FocusTarget::Table {
                     let len = self.filtered_containers().len();
                     Self::next_in_table(&mut self.container_table_state, len);
                 } else {
@@ -591,7 +994,7 @@ impl App {
                 }
             }
             Tab::Image => {
-                if self.image_table_focus {
+                if self.focus_target == FocusTarget::Table {
                     let len = self.filtered_images().len();
                     Self::next_in_table(&mut self.image_table_state, len);
                 } else {
@@ -599,7 +1002,7 @@ impl App {
                 }
             }
             Tab::Network => {
-                if self.network_table_focus {
+                if self.focus_target == FocusTarget::Table {
                     let len = self.filtered_networks().len();
                     Self::next_in_table(&mut self.network_table_state, len);
                 } else {
@@ -607,7 +1010,7 @@ impl App {
                 }
             }
             Tab::Volume => {
-                if self.volume_table_focus {
+                if self.focus_target == FocusTarget::Table {
                     let len = self.filtered_volumes().len();
                     Self::next_in_table(&mut self.volume_table_state, len);
                 } else {
@@ -625,7 +1028,7 @@ impl App {
         match self.current_tab {
             Tab::Dashboard => {}
             Tab::Container => {
-                if self.container_table_focus {
+                if self.focus_target == FocusTarget::Table {
                     let len = self.filtered_containers().len();
                     Self::previous_in_table(&mut self.container_table_state, len);
                 } else {
@@ -636,7 +1039,7 @@ impl App {
                 }
             }
             Tab::Image => {
-                if self.image_table_focus {
+                if self.focus_target == FocusTarget::Table {
                     let len = self.filtered_images().len();
                     Self::previous_in_table(&mut self.image_table_state, len);
                 } else {
@@ -644,7 +1047,7 @@ impl App {
                 }
             }
             Tab::Network => {
-                if self.network_table_focus {
+                if self.focus_target == FocusTarget::Table {
                     let len = self.filtered_networks().len();
                     Self::previous_in_table(&mut self.network_table_state, len);
                 } else {
@@ -655,7 +1058,7 @@ impl App {
                 }
             }
             Tab::Volume => {
-                if self.volume_table_focus {
+                if self.focus_target == FocusTarget::Table {
                     let len = self.filtered_volumes().len();
                     Self::previous_in_table(&mut self.volume_table_state, len);
                 } else {
@@ -679,6 +1082,7 @@ impl App {
             Tab::Project => Tab::Help,
             Tab::Help => Tab::Dashboard,
         };
+        self.sync_focus_target();
     }
 
     pub fn previous_tab(&mut self) {
@@ -691,6 +1095,16 @@ impl App {
             Tab::Project => Tab::Volume,
             Tab::Help => Tab::Project,
         };
+        self.sync_focus_target();
+    }
+
+    pub fn show_help(&mut self) {
+        self.current_tab = Tab::Help;
+        self.sync_focus_target();
+    }
+
+    pub fn is_help(&self) -> bool {
+        matches!(self.current_tab, Tab::Help)
     }
 
     // --- Input mode ---
@@ -1136,7 +1550,7 @@ impl App {
         match self.current_tab {
             Tab::Dashboard => None,
             Tab::Container => {
-                if self.container_table_focus {
+                if self.focus_target == FocusTarget::Table {
                     let containers = self.filtered_containers();
                     if let Some(index) = self.container_table_state.selected()
                         && let Some(container) = containers.get(index)
@@ -1155,7 +1569,7 @@ impl App {
                 None
             }
             Tab::Image => {
-                if self.image_table_focus {
+                if self.focus_target == FocusTarget::Table {
                     let images = self.filtered_images();
                     if let Some(index) = self.image_table_state.selected()
                         && let Some(image) = images.get(index)
@@ -1175,7 +1589,7 @@ impl App {
                 None
             }
             Tab::Network => {
-                if self.network_table_focus {
+                if self.focus_target == FocusTarget::Table {
                     let networks = self.filtered_networks();
                     if let Some(index) = self.network_table_state.selected()
                         && let Some(network) = networks.get(index)
@@ -1195,7 +1609,7 @@ impl App {
                 None
             }
             Tab::Volume => {
-                if self.volume_table_focus {
+                if self.focus_target == FocusTarget::Table {
                     let volumes = self.filtered_volumes();
                     if let Some(index) = self.volume_table_state.selected()
                         && let Some(volume) = volumes.get(index)
@@ -1234,7 +1648,7 @@ mod tests {
     #[test]
     fn next_wraps_to_first_container_action() {
         let mut app = App::new();
-        app.container_table_focus = false;
+        app.focus_target = FocusTarget::Actions;
         app.container_list_state
             .select(Some(app.container_actions.len() - 1));
 
@@ -1246,7 +1660,7 @@ mod tests {
     #[test]
     fn previous_wraps_to_last_container_action() {
         let mut app = App::new();
-        app.container_table_focus = false;
+        app.focus_target = FocusTarget::Actions;
         app.container_list_state.select(Some(0));
 
         app.previous();
@@ -1384,6 +1798,7 @@ mod tests {
     fn volume_backup_requires_mutation_confirmation() {
         let mut app = App::new();
         app.current_tab = Tab::Volume;
+        app.focus_target = FocusTarget::Actions;
         app.volume_list_state.select(Some(3));
         app.execute_selected();
         app.input_buffer = "data|/tmp/data.tar.gz".to_string();
@@ -1427,7 +1842,7 @@ mod tests {
     #[test]
     fn start_action_creates_named_container_request() {
         let mut app = App::new();
-        app.container_table_focus = false;
+        app.focus_target = FocusTarget::Actions;
         app.container_list_state.select(Some(1));
         app.execute_selected();
         app.input_buffer = "web".to_string();
@@ -1446,7 +1861,7 @@ mod tests {
     #[test]
     fn stop_action_creates_named_container_request() {
         let mut app = App::new();
-        app.container_table_focus = false;
+        app.focus_target = FocusTarget::Actions;
         app.container_list_state.select(Some(3));
         app.execute_selected();
         app.input_buffer = "web".to_string();
@@ -1479,6 +1894,7 @@ mod tests {
     fn image_list_action_requests_bollard_image_listing() {
         let mut app = App::new();
         app.current_tab = Tab::Image;
+        app.focus_target = FocusTarget::Actions;
         app.image_list_state.select(Some(2));
 
         let request = app.execute_selected().expect("image list request");
@@ -1496,10 +1912,11 @@ mod tests {
             size: 1024,
         }]);
 
-        app.toggle_focus();
+        app.focus_target = FocusTarget::Actions;
+        app.focus_next();
         app.execute_selected();
 
-        assert!(app.image_table_focus);
+        assert_eq!(app.focus_target, FocusTarget::Table);
         assert!(
             app.output_lines
                 .back()
@@ -1511,6 +1928,7 @@ mod tests {
     fn network_and_volume_list_actions_use_bollard_requests() {
         let mut app = App::new();
         app.current_tab = Tab::Network;
+        app.focus_target = FocusTarget::Actions;
         app.network_list_state.select(Some(0));
         assert!(matches!(
             app.execute_selected(),
@@ -1522,11 +1940,13 @@ mod tests {
             driver: "bridge".to_string(),
             scope: "local".to_string(),
         }]);
-        app.toggle_focus();
+        app.focus_target = FocusTarget::Actions;
+        app.focus_next();
         app.execute_selected();
-        assert!(app.network_table_focus);
+        assert_eq!(app.focus_target, FocusTarget::Table);
 
         app.current_tab = Tab::Volume;
+        app.focus_target = FocusTarget::Actions;
         app.volume_list_state.select(Some(0));
         assert!(matches!(
             app.execute_selected(),
@@ -1537,9 +1957,10 @@ mod tests {
             driver: "local".to_string(),
             mountpoint: "/var/lib/data".to_string(),
         }]);
-        app.toggle_focus();
+        app.focus_target = FocusTarget::Actions;
+        app.focus_next();
         app.execute_selected();
-        assert!(app.volume_table_focus);
+        assert_eq!(app.focus_target, FocusTarget::Table);
     }
 
     #[test]
@@ -1568,5 +1989,93 @@ mod tests {
         assert_eq!(app.filtered_images().len(), 1);
         assert_eq!(app.filtered_networks().len(), 1);
         assert_eq!(app.filtered_volumes().len(), 1);
+    }
+
+    #[test]
+    fn tab_navigation_cycles_resource_tabs() {
+        let mut app = App::new();
+
+        app.next_tab();
+        assert_eq!(app.current_tab, Tab::Image);
+        app.previous_tab();
+        assert_eq!(app.current_tab, Tab::Container);
+    }
+
+    #[test]
+    fn incremental_search_filters_and_escape_restores_previous_filter() {
+        let mut app = App::new();
+        app.set_containers(vec![
+            ContainerRow {
+                id: "one".into(),
+                name: "api".into(),
+                image: "demo".into(),
+                state: "running".into(),
+                status: "Up".into(),
+            },
+            ContainerRow {
+                id: "two".into(),
+                name: "worker".into(),
+                image: "demo".into(),
+                state: "exited".into(),
+                status: "Exited".into(),
+            },
+        ]);
+        app.start_search();
+        app.search_push('a');
+        app.search_push('p');
+        assert_eq!(app.filtered_containers().len(), 1);
+        app.cancel_search();
+        assert!(app.container_filter.is_empty());
+        assert_eq!(app.filtered_containers().len(), 2);
+    }
+
+    #[test]
+    fn selection_is_preserved_by_resource_identity() {
+        let mut app = App::new();
+        app.set_images(vec![
+            ImageRow {
+                id: "first".into(),
+                tag: "one".into(),
+                size: 1,
+            },
+            ImageRow {
+                id: "second".into(),
+                tag: "two".into(),
+                size: 2,
+            },
+        ]);
+        app.image_table_state.select(Some(1));
+        app.set_images(vec![
+            ImageRow {
+                id: "second".into(),
+                tag: "two".into(),
+                size: 2,
+            },
+            ImageRow {
+                id: "first".into(),
+                tag: "one".into(),
+                size: 1,
+            },
+        ]);
+        assert_eq!(
+            app.selected_resource_id(ResourceKind::Image).as_deref(),
+            Some("second")
+        );
+    }
+
+    #[test]
+    fn context_actions_follow_container_state_and_keep_request_policy() {
+        let mut app = App::new();
+        app.set_containers(vec![ContainerRow {
+            id: "container".into(),
+            name: "api".into(),
+            image: "demo".into(),
+            state: "running".into(),
+            status: "Up".into(),
+        }]);
+        assert!(app.context_actions().contains(&ContextAction::Stop));
+        assert!(!app.context_actions().contains(&ContextAction::Start));
+        let request = app.context_request(ContextAction::Remove).unwrap();
+        assert_eq!(request.mutation(), Mutation::Destructive);
     }
 }

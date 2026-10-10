@@ -5,7 +5,7 @@ mod security;
 mod tasks;
 mod tui;
 
-use app::App;
+use app::{App, Overlay, Tab, notifications::NotificationKind};
 use clap::Parser;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use docker::client::{
@@ -77,15 +77,38 @@ fn dispatch_request(
     let description = request.description();
     if !policy.allows(mutation) {
         app.push_output(format!("[blocked: read-only context: {}]", description));
+        app.notify(
+            NotificationKind::Warning,
+            "Action blocked by read-only policy",
+            true,
+        );
         return;
     }
     if !confirmed && policy.requires_confirmation(mutation) {
-        app.push_output(format!("[confirmation required: {} (y/n)]", description));
+        let consequence = if mutation == security::Mutation::Destructive {
+            "; consequence: the resource will be removed"
+        } else {
+            ""
+        };
+        app.push_output(format!(
+            "[confirmation required: {}{} (y/n)]",
+            description, consequence
+        ));
+        app.notify(
+            NotificationKind::Warning,
+            format!("Confirm: {}{}", description, consequence),
+            true,
+        );
         *pending_confirmation = Some(request);
         return;
     }
     if !task_manager.spawn(request) {
         app.push_output("[Task in progress: press x to cancel]");
+        app.notify(
+            NotificationKind::Warning,
+            "A task is already in progress",
+            false,
+        );
     }
 }
 
@@ -104,6 +127,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::with_project_folder(config.project_folder.clone());
+    app.set_policy(policy);
     app.set_output_capacity(config.output_capacity);
     app.set_theme(config.theme);
     let engine_connection = EngineConnection::connect(config.docker_context.as_deref()).await;
@@ -122,19 +146,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut should_quit = false;
 
     while !should_quit {
+        app.tick();
         while let Some(task_event) = task_manager.try_next() {
             match task_event {
                 TaskEvent::Started { id } => {
+                    app.set_task_status("running");
                     app.push_output(format!("[task {} started]", id));
                 }
                 TaskEvent::Progress { id, message } => {
+                    app.set_task_status(message.clone());
                     app.push_output(format!("[task {}] {}", id, message));
                 }
                 TaskEvent::Finished { id, lines } => {
+                    app.set_task_status("idle");
+                    let failed = lines.iter().any(|line| {
+                        let line = line.to_lowercase();
+                        line.contains("error")
+                            || line.contains("failed")
+                            || line.contains("failure")
+                    });
                     app.append_output(lines);
+                    app.notify(
+                        if failed {
+                            NotificationKind::Error
+                        } else {
+                            NotificationKind::Success
+                        },
+                        if failed {
+                            format!("Task {} failed", id)
+                        } else {
+                            format!("Task {} completed", id)
+                        },
+                        failed,
+                    );
                     task_manager.complete(id);
                 }
                 TaskEvent::Containers { id, containers } => {
+                    app.set_task_status("idle");
                     let count = containers.len();
                     app.set_containers(containers);
                     app.push_output(format!("[docker] loaded {} containers", count));
@@ -146,7 +194,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 TaskEvent::LogLine { line } => {
                     app.push_log_line(line);
                 }
+                TaskEvent::EventLine { line, alert } => {
+                    app.set_task_status("events");
+                    app.push_event(line, alert);
+                }
                 TaskEvent::Dashboard { id, data } => {
+                    app.set_task_status("idle");
                     app.set_dashboard(data);
                     task_manager.complete(id);
                     if task_manager.has_client() {
@@ -154,6 +207,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 TaskEvent::Images { id, images } => {
+                    app.set_task_status("idle");
                     let count = images.len();
                     app.set_images(images);
                     app.push_output(format!("[docker] loaded {} images", count));
@@ -163,6 +217,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 TaskEvent::Networks { id, networks } => {
+                    app.set_task_status("idle");
                     app.set_networks(networks);
                     task_manager.complete(id);
                     if task_manager.has_client() {
@@ -170,11 +225,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 TaskEvent::Volumes { id, volumes } => {
+                    app.set_task_status("idle");
                     app.set_volumes(volumes);
                     task_manager.complete(id);
-                }
-                TaskEvent::EventLine { line, alert } => {
-                    app.push_event(line, alert);
                 }
             }
         }
@@ -225,11 +278,82 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         _ => None,
                     }
+                } else if !matches!(app.overlay, Overlay::None) {
+                    match &app.overlay {
+                        Overlay::Palette { .. } => match code {
+                            KeyCode::Enter => app.palette_request(),
+                            KeyCode::Esc => {
+                                app.overlay = Overlay::None;
+                                None
+                            }
+                            KeyCode::Backspace => {
+                                app.palette_query_backspace();
+                                None
+                            }
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                app.palette_move(-1);
+                                None
+                            }
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                app.palette_move(1);
+                                None
+                            }
+                            KeyCode::Char(c) => {
+                                app.palette_query_push(c);
+                                None
+                            }
+                            _ => None,
+                        },
+                        Overlay::Search(_) => match code {
+                            KeyCode::Enter => {
+                                app.finish_search();
+                                None
+                            }
+                            KeyCode::Esc => {
+                                app.cancel_search();
+                                None
+                            }
+                            KeyCode::Backspace => {
+                                app.search_backspace();
+                                None
+                            }
+                            KeyCode::Char(c) => {
+                                app.search_push(c);
+                                None
+                            }
+                            _ => None,
+                        },
+                        Overlay::Context { .. } => match code {
+                            KeyCode::Enter => app.context_request_selected(),
+                            KeyCode::Esc => {
+                                app.overlay = Overlay::None;
+                                None
+                            }
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                app.context_move(-1);
+                                None
+                            }
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                app.context_move(1);
+                                None
+                            }
+                            _ => None,
+                        },
+                        Overlay::None => None,
+                    }
                 } else {
                     // Normal mode
                     match (code, modifiers) {
-                        (KeyCode::Char('q'), _) | (KeyCode::Esc, _) => {
+                        (KeyCode::Char('q'), _) => {
                             should_quit = true;
+                            None
+                        }
+                        (KeyCode::Esc, _) => {
+                            if app.is_help() {
+                                app.previous_tab();
+                            } else {
+                                should_quit = true;
+                            }
                             None
                         }
                         (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
@@ -240,9 +364,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             app.clear_output();
                             None
                         }
+                        (KeyCode::Backspace, _) => {
+                            app.dismiss_notification();
+                            None
+                        }
                         (KeyCode::Char(key), _) if key == shortcuts.cancel_task => {
                             if task_manager.cancel() {
                                 app.push_output("[task cancelled]");
+                                app.notify(NotificationKind::Info, "Task cancelled", false);
                             }
                             None
                         }
@@ -255,9 +384,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         (KeyCode::Char('v'), _) => Some(TaskRequest::ListVolumes),
                         (KeyCode::Char('e'), _) => Some(TaskRequest::Events),
                         (KeyCode::Char('u'), _) => Some(TaskRequest::DiskUsage { preview: false }),
-                        (KeyCode::Char('k'), _) => Some(TaskRequest::DiskUsage { preview: true }),
+                        (KeyCode::Char('K'), _) => Some(TaskRequest::DiskUsage { preview: true }),
                         (KeyCode::Char('f'), _) => {
                             app.start_filter();
+                            None
+                        }
+                        (KeyCode::Char(':'), _) => {
+                            app.start_palette();
+                            None
+                        }
+                        (KeyCode::Char('a'), _) => {
+                            app.start_context_menu();
                             None
                         }
                         (KeyCode::Char(key), _) if key == shortcuts.toggle_focus => {
@@ -273,19 +410,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             None
                         }
                         (KeyCode::Char('/'), _) => {
-                            app.start_log_filter();
+                            if !app.log_lines.is_empty() {
+                                app.start_log_filter();
+                            } else if matches!(
+                                app.current_tab,
+                                Tab::Container | Tab::Image | Tab::Network | Tab::Volume
+                            ) {
+                                app.start_search();
+                            } else {
+                                app.start_log_filter();
+                            }
                             None
                         }
                         (KeyCode::Char(key), _) if key == shortcuts.theme => {
                             app.cycle_theme();
                             None
                         }
-                        (KeyCode::Tab, _) => {
+                        (KeyCode::Right, _) => {
                             app.next_tab();
                             None
                         }
-                        (KeyCode::BackTab, _) => {
+                        (KeyCode::Left, _) => {
                             app.previous_tab();
+                            None
+                        }
+                        (KeyCode::Tab, _) => {
+                            app.focus_next();
+                            None
+                        }
+                        (KeyCode::BackTab, _) => {
+                            app.focus_previous();
                             None
                         }
                         (KeyCode::Up, _) => {
@@ -294,6 +448,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         (KeyCode::Down, _) => {
                             app.next();
+                            None
+                        }
+                        (KeyCode::Char('j'), _) => {
+                            app.next();
+                            None
+                        }
+                        (KeyCode::Char('k'), _) => {
+                            app.previous();
+                            None
+                        }
+                        (KeyCode::Char('?'), _) => {
+                            app.show_help();
                             None
                         }
                         (KeyCode::PageUp, _) => {
