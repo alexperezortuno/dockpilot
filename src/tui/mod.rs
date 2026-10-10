@@ -5,25 +5,22 @@ pub mod widgets;
 
 use self::layout::areas;
 use self::widgets::status::footer_line;
-use crate::app::{
-    App, ContainerAction, ImageAction, NetworkAction, ProjectAction, Tab, VolumeAction,
-};
+use crate::app::{App, Tab};
 use crate::config::ThemeName;
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    widgets::{Block, Borders, Cell, List, ListItem, ListState, Paragraph, Row, Table, Tabs},
+    widgets::{Block, Borders, Paragraph, Tabs},
 };
 
 #[derive(Clone, Copy)]
-struct Palette {
-    foreground: Color,
-    accent: Color,
-    selection: Color,
+pub(crate) struct Palette {
+    pub(crate) foreground: Color,
+    pub(crate) accent: Color,
+    pub(crate) selection: Color,
 }
 
-fn palette(theme: ThemeName) -> Palette {
+pub(crate) fn palette(theme: ThemeName) -> Palette {
     match theme {
         ThemeName::Dark => Palette {
             foreground: Color::White,
@@ -44,11 +41,8 @@ fn palette(theme: ThemeName) -> Palette {
 }
 
 pub fn draw_app(f: &mut Frame, app: &mut App) {
-    let size = f.area();
+    let layout = areas(f.area(), app.input_mode);
     let colors = palette(app.theme);
-    let layout = areas(size, app.input_mode);
-
-    // Tabs
     let tab_titles = [
         "Dashboard",
         "Container",
@@ -58,7 +52,6 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
         "Project",
         "Help",
     ];
-
     let selected_tab = match app.current_tab {
         Tab::Dashboard => 0,
         Tab::Container => 1,
@@ -82,671 +75,137 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
                 .fg(colors.accent)
                 .add_modifier(Modifier::BOLD),
         );
-
     f.render_widget(tabs, layout.header);
-
-    let footer = footer_line(app.focus_label(), &app.task_status);
-    f.render_widget(Paragraph::new(footer), layout.footer);
-
-    if matches!(app.current_tab, Tab::Dashboard) {
-        draw_dashboard(f, app, layout.content);
-        draw_output(f, app, layout.output);
-        return;
-    }
-
-    if matches!(app.current_tab, Tab::Image) {
-        draw_image_tab(f, app, layout.content, colors);
-        if let Some(area) = layout.input {
-            draw_input(f, app, area);
-        }
-        return;
-    }
-
-    if matches!(app.current_tab, Tab::Network) {
-        draw_network_tab(f, app, layout.content, colors);
-        if let Some(area) = layout.input {
-            draw_input(f, app, area);
-        }
-        return;
-    }
-
-    if matches!(app.current_tab, Tab::Volume) {
-        draw_volume_tab(f, app, layout.content, colors);
-        if let Some(area) = layout.input {
-            draw_input(f, app, area);
-        }
-        return;
-    }
-
-    if matches!(app.current_tab, Tab::Container) {
-        draw_container_tab(f, app, layout.content, colors);
-        if let Some(area) = layout.input {
-            draw_input(f, app, area);
-        }
-        return;
-    }
-
-    // List of actions
-    let (items, title, state): (Vec<ListItem>, &str, &mut ListState) = match app.current_tab {
-        Tab::Dashboard => (Vec::new(), "Dashboard", &mut app.container_list_state),
-        Tab::Container => {
-            let items = app
-                .container_actions
-                .iter()
-                .map(|a| {
-                    let s = match a {
-                        ContainerAction::StartAll => "Start All Containers",
-                        ContainerAction::Start => "Start Container by Name",
-                        ContainerAction::StopAll => "Stop all Containers",
-                        ContainerAction::Stop => "Stop Container by Name",
-                        ContainerAction::Restart => "Restart Container",
-                        ContainerAction::ListAll => "List All Containers",
-                        ContainerAction::List => "List Containers",
-                        ContainerAction::Logs => "View Container Logs",
-                        ContainerAction::Create => "Create Container",
-                        ContainerAction::Remove => "Remove Container",
-                        ContainerAction::Top => "View Container Top",
-                        ContainerAction::Diff => "View Container Diff",
-                        ContainerAction::Pause => "Pause Container",
-                        ContainerAction::Unpause => "Unpause Container",
-                        ContainerAction::Update => "Update Container",
-                        ContainerAction::Wait => "Wait for Container",
-                    };
-                    ListItem::new(s)
-                })
-                .collect();
-            (items, "Container Actions", &mut app.container_list_state)
-        }
-        Tab::Image => {
-            let items = app
-                .image_actions
-                .iter()
-                .map(|a| {
-                    let s = match a {
-                        ImageAction::Build => "Build Image",
-                        ImageAction::Rebuild => "Rebuild Image (no-cache)",
-                        ImageAction::List => "List Images",
-                        ImageAction::Remove => "Remove Image",
-                        ImageAction::Push => "Push Image",
-                        ImageAction::Pull => "Pull Image",
-                        ImageAction::Save => "Save Image to tar",
-                        ImageAction::Load => "Load Image from tar",
-                        ImageAction::History => "View Image History",
-                    };
-                    ListItem::new(s)
-                })
-                .collect();
-            (items, "Image Actions", &mut app.image_list_state)
-        }
-        Tab::Network => {
-            let items = app
-                .network_actions
-                .iter()
-                .map(|a| {
-                    let s = match a {
-                        NetworkAction::List => "List Networks",
-                        NetworkAction::Create => "Create Network",
-                        NetworkAction::Remove => "Remove Network",
-                    };
-                    ListItem::new(s)
-                })
-                .collect();
-            (items, "Network Actions", &mut app.network_list_state)
-        }
-        Tab::Volume => {
-            let items = app
-                .volume_actions
-                .iter()
-                .map(|a| {
-                    let s = match a {
-                        VolumeAction::List => "List Volumes",
-                        VolumeAction::Create => "Create Volume",
-                        VolumeAction::Remove => "Remove Volume",
-                        VolumeAction::Backup => "Backup Volume",
-                        VolumeAction::Restore => "Restore Volume",
-                    };
-                    ListItem::new(s)
-                })
-                .collect();
-            (items, "Volume Actions", &mut app.volume_list_state)
-        }
-        Tab::Project => {
-            let items = app
-                .project_actions
-                .iter()
-                .map(|a| {
-                    let s = match a {
-                        ProjectAction::SetFolder => "Set Project Folder",
-                        ProjectAction::ComposeUp => "Compose Up",
-                        ProjectAction::ComposeUpProfile => "Compose Up (Profile)",
-                        ProjectAction::ComposeDown => "Compose Down",
-                        ProjectAction::ComposeConfig => "Compose Config",
-                    };
-                    ListItem::new(s)
-                })
-                .collect();
-            (items, "Project Actions", &mut app.project_list_state)
-        }
-        Tab::Help => {
-            let help = vec![
-                "Dockpilot TUI",
-                "",
-                "Controls:",
-                "  Tab / Shift+Tab - Change focus",
-                "  Left / Right    - Change resource tab",
-                "  Up/Down / j/k   - Navigate focused component",
-                "  Enter           - Execute / prompt for parameter",
-                "  x               - Cancel active task",
-                "  c               - Clear general output",
-                "  PageUp/PageDown - Scroll output",
-                "  Home/End        - Output start/end",
-                "  r               - Refresh containers",
-                "  f               - Filter current table",
-                "  m               - Toggle table/actions focus",
-                "  s               - Cycle container sort",
-                "  p               - Pause/resume log display",
-                "  /               - Filter log lines",
-                "  Empty filter + Enter - Clear filter",
-                "  e               - Start Docker event stream",
-                "  ?               - Open contextual help",
-                "  u               - Show disk usage",
-                "  K               - Preview cleanup",
-                "  q / Esc         - Exit",
-                "",
-                "Input mode:",
-                "  Enter    - Confirm",
-                "  Esc      - Cancel",
-                "  Backspace- Delete",
-                "  y / n    - Confirm or cancel pending action",
-                "",
-                "Available tabs:",
-                "  Dashboard, Container, Image, Network, Volume, Project",
-            ];
-            let items: Vec<ListItem> = help.iter().map(|l| ListItem::new(*l)).collect();
-            let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Help"));
-            f.render_widget(list, layout.content);
-            draw_output(f, app, layout.output);
-            if let Some(area) = layout.input {
-                draw_input(f, app, area);
-            }
-            return;
-        }
-    };
-
-    let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title(title))
-        .highlight_style(
-            Style::default()
-                .bg(colors.selection)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol(">> ");
-
-    f.render_stateful_widget(list, layout.content, state);
-
-    draw_output(f, app, layout.output);
-
-    if let Some(area) = layout.input {
-        draw_input(f, app, area);
-    }
-}
-
-fn draw_dashboard(f: &mut Frame, app: &App, area: Rect) {
-    let text = match &app.dashboard {
-        Some(data) => {
-            let selected = match &data.selected_stats {
-                Some(stats) => format!(
-                    "Selected {}: CPU {:.2}% | memory {}/{} MB",
-                    stats.id,
-                    stats.cpu_percent,
-                    stats.memory_usage / 1_048_576,
-                    stats.memory_limit / 1_048_576
-                ),
-                None => "Selected container stats: unavailable".to_string(),
-            };
-            format!(
-                "Docker Engine {}\nContainers: {} total | {} running | {} paused | {} stopped\nHealth: {} running, {} paused, {} stopped\n{}\n\nPress d to refresh dashboard",
-                data.engine_version,
-                data.containers_total,
-                data.containers_running,
-                data.containers_paused,
-                data.containers_stopped,
-                data.containers_running,
-                data.containers_paused,
-                data.containers_stopped,
-                selected
-            )
-        }
-        None => "Dashboard data unavailable\nPress d to refresh dashboard".to_string(),
-    };
-    let widget =
-        Paragraph::new(text).block(Block::default().borders(Borders::ALL).title("Dashboard"));
-    f.render_widget(widget, area);
-}
-
-fn draw_image_tab(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
-    let panes = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(72), Constraint::Percentage(28)])
-        .split(area);
-    let images = app.filtered_images();
-    let rows = images.iter().map(|image| {
-        Row::new([
-            Cell::from(image.id.clone()),
-            Cell::from(image.tag.clone()),
-            Cell::from(format!("{} MB", image.size / 1_048_576)),
-        ])
-    });
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Length(14),
-            Constraint::Min(24),
-            Constraint::Length(12),
-        ],
-    )
-    .header(Row::new(["ID", "Tag", "Size"]))
-    .block(Block::default().borders(Borders::ALL).title(format!(
-        " Images ({}) | filter: {} | focus: {} ",
-        images.len(),
-        if app.image_filter.is_empty() {
-            "none"
-        } else {
-            &app.image_filter
-        },
-        if app.image_table_focus {
-            "table"
-        } else {
-            "actions"
-        }
-    )))
-    .row_highlight_style(
-        Style::default()
-            .bg(colors.selection)
-            .add_modifier(Modifier::BOLD),
-    )
-    .highlight_symbol(">> ");
-    f.render_stateful_widget(table, panes[0], &mut app.image_table_state);
-    if app.image_table_focus {
-        draw_details(
-            f,
-            panes[1],
-            app.filtered_images()
-                .get(app.image_table_state.selected().unwrap_or(0))
-                .map(|image| {
-                    format!(
-                        "ID: {}\nTag: {}\nSize: {} bytes",
-                        image.id, image.tag, image.size
-                    )
-                })
-                .unwrap_or_else(|| "No images available\nPress i to refresh".to_string()),
-            "Image Details",
-        );
-        return;
-    }
-
-    let items = app.image_actions.iter().map(|action| {
-        let label = match action {
-            ImageAction::Build => "Build Image",
-            ImageAction::Rebuild => "Rebuild Image (no-cache)",
-            ImageAction::List => "Refresh Images",
-            ImageAction::Remove => "Remove Image",
-            ImageAction::Push => "Push Image",
-            ImageAction::Pull => "Pull Image",
-            ImageAction::Save => "Save Image to tar",
-            ImageAction::Load => "Load Image from tar",
-            ImageAction::History => "View Image History",
-        };
-        ListItem::new(label)
-    });
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("Image Actions"),
-        )
-        .highlight_style(
-            Style::default()
-                .bg(colors.selection)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol(">> ");
-    f.render_stateful_widget(list, panes[1], &mut app.image_list_state);
-}
-
-fn draw_network_tab(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
-    let panes = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(72), Constraint::Percentage(28)])
-        .split(area);
-    let networks = app.filtered_networks();
-    let rows = networks.iter().map(|network| {
-        Row::new([
-            network.id.clone(),
-            network.name.clone(),
-            network.driver.clone(),
-            network.scope.clone(),
-        ])
-    });
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Length(12),
-            Constraint::Min(20),
-            Constraint::Length(12),
-            Constraint::Length(12),
-        ],
-    )
-    .header(Row::new(["ID", "Name", "Driver", "Scope"]))
-    .block(Block::default().borders(Borders::ALL).title(format!(
-        " Networks ({}) | filter: {} | focus: {} ",
-        networks.len(),
-        if app.network_filter.is_empty() {
-            "none"
-        } else {
-            &app.network_filter
-        },
-        if app.network_table_focus {
-            "table"
-        } else {
-            "actions"
-        }
-    )))
-    .row_highlight_style(
-        Style::default()
-            .bg(colors.selection)
-            .add_modifier(Modifier::BOLD),
-    )
-    .highlight_symbol(">> ");
-    f.render_stateful_widget(table, panes[0], &mut app.network_table_state);
-    if app.network_table_focus {
-        draw_details(
-            f,
-            panes[1],
-            app.filtered_networks()
-                .get(app.network_table_state.selected().unwrap_or(0))
-                .map(|network| {
-                    format!(
-                        "Name: {}\nDriver: {}\nScope: {}",
-                        network.name, network.driver, network.scope
-                    )
-                })
-                .unwrap_or_else(|| "No networks available\nPress n to refresh".to_string()),
-            "Network Details",
-        );
-        return;
-    }
-    let items = app.network_actions.iter().map(|action| {
-        ListItem::new(match action {
-            NetworkAction::List => "Refresh Networks",
-            NetworkAction::Create => "Create Network",
-            NetworkAction::Remove => "Remove Network",
-        })
-    });
-    let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title("Actions"))
-        .highlight_style(
-            Style::default()
-                .bg(colors.selection)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol(">> ");
-    f.render_stateful_widget(list, panes[1], &mut app.network_list_state);
-}
-
-fn draw_volume_tab(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
-    let panes = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(72), Constraint::Percentage(28)])
-        .split(area);
-    let volumes = app.filtered_volumes();
-    let rows = volumes.iter().map(|volume| {
-        Row::new([
-            volume.name.clone(),
-            volume.driver.clone(),
-            volume.mountpoint.clone(),
-        ])
-    });
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Min(24),
-            Constraint::Length(16),
-            Constraint::Min(36),
-        ],
-    )
-    .header(Row::new(["Name", "Driver", "Mountpoint"]))
-    .block(Block::default().borders(Borders::ALL).title(format!(
-        " Volumes ({}) | filter: {} | focus: {} ",
-        volumes.len(),
-        if app.volume_filter.is_empty() {
-            "none"
-        } else {
-            &app.volume_filter
-        },
-        if app.volume_table_focus {
-            "table"
-        } else {
-            "actions"
-        }
-    )))
-    .row_highlight_style(
-        Style::default()
-            .bg(colors.selection)
-            .add_modifier(Modifier::BOLD),
-    )
-    .highlight_symbol(">> ");
-    f.render_stateful_widget(table, panes[0], &mut app.volume_table_state);
-    if app.volume_table_focus {
-        draw_details(
-            f,
-            panes[1],
-            app.filtered_volumes()
-                .get(app.volume_table_state.selected().unwrap_or(0))
-                .map(|volume| {
-                    format!(
-                        "Name: {}\nDriver: {}\nMountpoint: {}",
-                        volume.name, volume.driver, volume.mountpoint
-                    )
-                })
-                .unwrap_or_else(|| "No volumes available\nPress v to refresh".to_string()),
-            "Volume Details",
-        );
-        return;
-    }
-    let items = app.volume_actions.iter().map(|action| {
-        ListItem::new(match action {
-            VolumeAction::List => "Refresh Volumes",
-            VolumeAction::Create => "Create Volume",
-            VolumeAction::Remove => "Remove Volume",
-            VolumeAction::Backup => "Backup Volume",
-            VolumeAction::Restore => "Restore Volume",
-        })
-    });
-    let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title("Actions"))
-        .highlight_style(
-            Style::default()
-                .bg(colors.selection)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol(">> ");
-    f.render_stateful_widget(list, panes[1], &mut app.volume_list_state);
-}
-
-fn draw_container_tab(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
-    let panes = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(72), Constraint::Percentage(28)])
-        .split(area);
-    let containers = app.filtered_containers();
-    let rows = containers.iter().map(|container| {
-        Row::new([
-            Cell::from(container.id.chars().take(12).collect::<String>()),
-            Cell::from(container.name.clone()),
-            Cell::from(container.image.clone()),
-            Cell::from(container.state.clone()),
-            Cell::from(container.status.clone()),
-        ])
-    });
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Length(12),
-            Constraint::Min(16),
-            Constraint::Min(16),
-            Constraint::Length(12),
-            Constraint::Min(20),
-        ],
-    )
-    .header(Row::new(["ID", "Name", "Image", "State", "Status"]))
-    .block(Block::default().borders(Borders::ALL).title(format!(
-        " Containers ({}) | filter: {} | focus: {} ",
-        containers.len(),
-        if app.container_filter.is_empty() {
-            "none"
-        } else {
-            &app.container_filter
-        },
-        if app.container_table_focus {
-            "table"
-        } else {
-            "actions"
-        }
-    )))
-    .row_highlight_style(
-        Style::default()
-            .bg(colors.selection)
-            .add_modifier(Modifier::BOLD),
-    )
-    .highlight_symbol(">> ");
-    f.render_stateful_widget(table, panes[0], &mut app.container_table_state);
-    if app.container_table_focus {
-        draw_details(
-            f,
-            panes[1],
-            app.filtered_containers()
-                .get(app.container_table_state.selected().unwrap_or(0))
-                .map(|container| {
-                    format!(
-                        "Name: {}\nImage: {}\nState: {}\nStatus: {}",
-                        container.name, container.image, container.state, container.status
-                    )
-                })
-                .unwrap_or_else(|| "No containers available\nPress r to refresh".to_string()),
-            "Container Details",
-        );
-        return;
-    }
-
-    let items = app.container_actions.iter().map(|action| {
-        let label = match action {
-            ContainerAction::StartAll => "Start All Containers",
-            ContainerAction::Start => "Start Container by Name",
-            ContainerAction::StopAll => "Stop all Containers",
-            ContainerAction::Stop => "Stop Container by Name",
-            ContainerAction::Restart => "Restart Container",
-            ContainerAction::ListAll => "List All Containers",
-            ContainerAction::List => "List Containers",
-            ContainerAction::Logs => "View Container Logs",
-            ContainerAction::Create => "Create Container",
-            ContainerAction::Remove => "Remove Container",
-            ContainerAction::Top => "View Container Top",
-            ContainerAction::Diff => "View Container Diff",
-            ContainerAction::Pause => "Pause Container",
-            ContainerAction::Unpause => "Unpause Container",
-            ContainerAction::Update => "Update Container",
-            ContainerAction::Wait => "Wait for Container",
-        };
-        ListItem::new(label)
-    });
-    let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title("Actions"))
-        .highlight_style(
-            Style::default()
-                .bg(colors.selection)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol(">> ");
-    let mut action_state = std::mem::take(&mut app.container_list_state);
-    f.render_stateful_widget(list, panes[1], &mut action_state);
-    app.container_list_state = action_state;
-}
-
-fn draw_output(f: &mut Frame, app: &mut App, area: Rect) {
-    let visible_height = area.height.saturating_sub(2) as usize;
-    let showing_logs = !app.log_lines.is_empty();
-    let showing_events = !showing_logs && !app.event_lines.is_empty();
-    let lines = if showing_logs {
-        app.filtered_log_lines()
-    } else if showing_events {
-        app.event_lines.iter().cloned().collect()
-    } else {
-        app.output_lines.iter().cloned().collect()
-    };
-    let total = lines.len();
-    let max_start = total.saturating_sub(visible_height);
-    let start = app.output_scroll.min(max_start);
-
-    let items: Vec<ListItem> = lines
-        .iter()
-        .skip(start)
-        .map(|l| ListItem::new(l.clone()))
-        .collect();
-
-    let output_list = List::new(items).block(Block::default().borders(Borders::ALL).title(
-        if showing_logs {
-            format!(
-                " Logs ({} lines{}) ",
-                total,
-                if app.logs_paused { ", paused" } else { "" }
-            )
-        } else if showing_events {
-            format!(" Events ({} lines, {} alerts) ", total, app.alerts.len())
-        } else {
-            format!(" Output ({} lines) ", total)
-        },
-    ));
-
-    f.render_widget(output_list, area);
-}
-
-fn draw_details(f: &mut Frame, area: Rect, text: String, title: &str) {
     f.render_widget(
-        Paragraph::new(text).block(Block::default().borders(Borders::ALL).title(title)),
-        area,
+        Paragraph::new(footer_line(app.focus_label(), &app.task_status)),
+        layout.footer,
     );
-}
 
-fn draw_input(f: &mut Frame, app: &App, area: Rect) {
-    let text = format!("{} {}", app.input_prompt, app.input_buffer);
-    let input_widget = Paragraph::new(text).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" Entry (Enter=OK, Esc=Cancel) ")
-            .border_style(Style::default().fg(Color::Yellow)),
-    );
-    f.render_widget(input_widget, area);
+    match app.current_tab {
+        Tab::Dashboard => screens::dashboard::draw(f, app, layout.content),
+        Tab::Container | Tab::Image | Tab::Network | Tab::Volume => {
+            screens::resources::draw(f, app, layout.content, colors)
+        }
+        Tab::Project | Tab::Help => {
+            screens::resources::draw_actions(f, app, layout.content, colors)
+        }
+    }
+
+    if !matches!(app.current_tab, Tab::Dashboard)
+        && let Some(area) = layout.input
+    {
+        widgets::input::draw(f, app, area);
+    }
+    widgets::output::draw(f, app, layout.output);
 }
 
 #[cfg(test)]
 mod tests {
     use super::draw_app;
-    use crate::app::App;
+    use crate::app::{App, ContainerSort, FocusTarget, Tab};
+    use crate::docker::client::{ContainerRow, ImageRow, NetworkRow, VolumeRow};
     use ratatui::{Terminal, backend::TestBackend};
 
-    #[test]
-    fn renders_without_panic_on_small_terminal() {
-        let backend = TestBackend::new(60, 20);
+    fn render(width: u16, height: u16, app: &mut App) -> String {
+        let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).expect("test terminal");
-        let mut app = App::new();
-
+        terminal.draw(|frame| draw_app(frame, app)).expect("render");
         terminal
-            .draw(|frame| draw_app(frame, &mut app))
-            .expect("render small terminal");
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
 
-        let buffer = terminal.backend().buffer();
-        assert!(buffer.area().width <= 60);
-        assert!(buffer.area().height <= 20);
+    #[test]
+    fn renders_all_tabs_at_supported_sizes() {
+        let sizes = [(120, 40), (80, 24), (60, 20), (40, 12), (20, 8)];
+        for (width, height) in sizes {
+            let mut app = App::new();
+            for tab in [
+                Tab::Dashboard,
+                Tab::Container,
+                Tab::Image,
+                Tab::Network,
+                Tab::Volume,
+                Tab::Project,
+                Tab::Help,
+            ] {
+                app.current_tab = tab;
+                let _ = render(width, height, &mut app);
+            }
+        }
+    }
+
+    #[test]
+    fn renders_populated_tables_and_input_at_small_sizes() {
+        let mut app = App::new();
+        app.set_containers(vec![ContainerRow {
+            id: "container-id".into(),
+            name: "api".into(),
+            image: "demo:latest".into(),
+            state: "running".into(),
+            status: "Up".into(),
+        }]);
+        app.set_images(vec![ImageRow {
+            id: "image-id".into(),
+            tag: "demo:latest".into(),
+            size: 1,
+        }]);
+        app.set_networks(vec![NetworkRow {
+            id: "network-id".into(),
+            name: "frontend".into(),
+            driver: "bridge".into(),
+            scope: "local".into(),
+        }]);
+        app.set_volumes(vec![VolumeRow {
+            name: "data".into(),
+            driver: "local".into(),
+            mountpoint: "/data".into(),
+        }]);
+        app.current_tab = Tab::Container;
+        app.focus_target = FocusTarget::Table;
+        app.start_container_filter();
+        let output = render(60, 20, &mut app);
+        assert!(output.contains("api"));
+    }
+
+    #[test]
+    fn details_follow_the_selected_resource() {
+        let mut app = App::new();
+        app.current_tab = Tab::Image;
+        app.focus_target = FocusTarget::Table;
+        app.set_images(vec![
+            ImageRow {
+                id: "first".into(),
+                tag: "one:latest".into(),
+                size: 1,
+            },
+            ImageRow {
+                id: "second".into(),
+                tag: "two:latest".into(),
+                size: 2,
+            },
+        ]);
+        let first = render(80, 24, &mut app);
+        app.image_table_state.select(Some(1));
+        let second = render(80, 24, &mut app);
+        assert!(first.contains("one:latest"));
+        assert!(second.contains("two:latest"));
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn focus_navigation_is_explicit_and_ordered() {
+        let mut app = App::new();
+        assert_eq!(app.focus_target, FocusTarget::Table);
+        app.focus_next();
+        assert_eq!(app.focus_target, FocusTarget::Actions);
+        app.focus_previous();
+        assert_eq!(app.focus_target, FocusTarget::Table);
+        app.toggle_container_sort();
+        assert_eq!(app.container_sort, ContainerSort::Image);
     }
 }
