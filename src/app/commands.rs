@@ -26,7 +26,7 @@ pub struct CommandEntry {
 }
 
 pub fn registry(app: &App, policy: SafetyPolicy, task_active: bool) -> Vec<CommandEntry> {
-    let busy = task_active.then_some("hay una tarea en progreso".to_string());
+    let busy = task_active.then_some("a task is in progress".to_string());
     let resource_tab = matches!(
         app.current_tab,
         Tab::Container | Tab::Image | Tab::Network | Tab::Volume
@@ -100,25 +100,25 @@ pub fn registry(app: &App, policy: SafetyPolicy, task_active: bool) -> Vec<Comma
         }
         if matches!(item.id, CommandId::Filter) && !resource_tab {
             item.enabled = false;
-            item.reason = Some("la pestaña actual no tiene recursos filtrables".to_string());
+            item.reason = Some("the current tab has no filterable resources".to_string());
         }
         if matches!(item.id, CommandId::InspectSelected) {
             if !matches!(app.current_tab, Tab::Container) || app.focus_target != FocusTarget::Table
             {
                 item.enabled = false;
-                item.reason = Some("selecciona un contenedor en la tabla".to_string());
+                item.reason = Some("select a container in the table".to_string());
             } else if app.selected_container_id().is_none() {
                 item.enabled = false;
-                item.reason = Some("no hay un contenedor seleccionado".to_string());
+                item.reason = Some("no container is selected".to_string());
             }
         }
         if matches!(item.id, CommandId::ContextActions) && !resource_tab {
             item.enabled = false;
-            item.reason = Some("selecciona un recurso Docker".to_string());
+            item.reason = Some("select a Docker resource".to_string());
         }
         if !policy.allows(crate::security::Mutation::ReadOnly) {
             item.enabled = false;
-            item.reason = Some("el contexto no permite operaciones".to_string());
+            item.reason = Some("the context does not allow operations".to_string());
         }
     }
     entries
