@@ -121,8 +121,21 @@ fn draw_containers(
             .and_then(|index| containers.get(index))
             .map(|container| {
                 format!(
-                    "Name: {}\nImage: {}\nState: {}\nStatus: {}",
-                    container.name, container.image, container.state, container.status
+                    "Name: {}\nImage: {}\nState: {}\nStatus: {}\nHealth: {}\nRestarts: {}",
+                    container.name,
+                    container.image,
+                    container.state,
+                    container.status,
+                    app.health
+                        .as_ref()
+                        .filter(|health| health.id == container.id)
+                        .map(|health| health.status.as_str())
+                        .unwrap_or("N/A"),
+                    app.health
+                        .as_ref()
+                        .filter(|health| health.id == container.id)
+                        .map(|health| health.restart_count.to_string())
+                        .unwrap_or_else(|| "N/A".to_string())
                 )
             })
             .unwrap_or_else(|| empty::message("containers", 'r'));

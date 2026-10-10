@@ -5,6 +5,7 @@ mod security;
 mod tasks;
 mod tui;
 
+use app::task_history::TaskState;
 use app::{App, Overlay, Tab, notifications::NotificationKind};
 use clap::Parser;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
@@ -13,7 +14,10 @@ use docker::client::{
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
 use security::SafetyPolicy;
-use std::{io, time::Duration};
+use std::{
+    io,
+    time::{Duration, Instant},
+};
 use tasks::{TaskEvent, TaskManager, TaskRequest};
 use tui::terminal::TerminalGuard;
 
@@ -144,42 +148,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let poll_interval = Duration::from_millis(config.poll_interval_ms);
     let mut pending_confirmation: Option<TaskRequest> = None;
     let mut should_quit = false;
+    let mut last_metrics = Instant::now();
+    let mut metrics_container: Option<String> = None;
 
     while !should_quit {
         app.tick();
         while let Some(task_event) = task_manager.try_next() {
             match task_event {
-                TaskEvent::Started { id } => {
+                TaskEvent::Started { id, description } => {
+                    app.queue_task(id, description);
+                    app.start_task(id);
                     app.set_task_status("running");
-                    app.push_output(format!("[task {} started]", id));
                 }
                 TaskEvent::Progress { id, message } => {
-                    app.set_task_status(message.clone());
-                    app.push_output(format!("[task {}] {}", id, message));
+                    app.set_task_status(format!("task {}: {}", id, message));
                 }
                 TaskEvent::Finished { id, lines } => {
+                    app.finish_task(id, TaskState::Completed);
                     app.set_task_status("idle");
-                    let failed = lines.iter().any(|line| {
-                        let line = line.to_lowercase();
-                        line.contains("error")
-                            || line.contains("failed")
-                            || line.contains("failure")
-                    });
                     app.append_output(lines);
                     app.notify(
-                        if failed {
-                            NotificationKind::Error
-                        } else {
-                            NotificationKind::Success
-                        },
-                        if failed {
-                            format!("Task {} failed", id)
-                        } else {
-                            format!("Task {} completed", id)
-                        },
-                        failed,
+                        NotificationKind::Success,
+                        format!("Task {} completed", id),
+                        false,
                     );
                     task_manager.complete(id);
+                }
+                TaskEvent::Failed { id, message } => {
+                    app.finish_task(id, TaskState::Failed);
+                    app.set_task_status("idle");
+                    app.notify(
+                        NotificationKind::Error,
+                        format!("Task {} failed: {}", id, message),
+                        true,
+                    );
+                    task_manager.complete(id);
+                }
+                TaskEvent::Cancelled { id } => {
+                    app.finish_task(id, TaskState::Cancelled);
+                    app.set_task_status("idle");
+                    app.notify(
+                        NotificationKind::Info,
+                        format!("Task {} cancelled", id),
+                        false,
+                    );
                 }
                 TaskEvent::Containers { id, containers } => {
                     app.set_task_status("idle");
@@ -202,9 +214,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     app.set_task_status("idle");
                     app.set_dashboard(data);
                     task_manager.complete(id);
-                    if task_manager.has_client() {
-                        task_manager.spawn(TaskRequest::ListImages);
+                    if task_manager.has_client()
+                        && let Some(container_id) = app.selected_container_id()
+                    {
+                        task_manager.spawn(TaskRequest::Metrics { id: container_id });
                     }
+                }
+                TaskEvent::Metrics {
+                    id,
+                    container_id,
+                    sample,
+                } => {
+                    app.record_metrics(Instant::now(), sample);
+                    app.set_task_status(format!("metrics: {}", container_id));
+                    task_manager.complete(id);
+                    if task_manager.has_client() {
+                        task_manager.spawn(TaskRequest::Health { id: container_id });
+                    }
+                }
+                TaskEvent::Health { id, snapshot } => {
+                    app.set_health(snapshot);
+                    app.set_task_status("health updated");
+                    task_manager.complete(id);
                 }
                 TaskEvent::Images { id, images } => {
                     app.set_task_status("idle");
@@ -212,17 +243,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     app.set_images(images);
                     app.push_output(format!("[docker] loaded {} images", count));
                     task_manager.complete(id);
-                    if task_manager.has_client() {
-                        task_manager.spawn(TaskRequest::ListNetworks);
-                    }
                 }
                 TaskEvent::Networks { id, networks } => {
                     app.set_task_status("idle");
                     app.set_networks(networks);
                     task_manager.complete(id);
-                    if task_manager.has_client() {
-                        task_manager.spawn(TaskRequest::ListVolumes);
-                    }
                 }
                 TaskEvent::Volumes { id, volumes } => {
                     app.set_task_status("idle");
@@ -230,6 +255,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     task_manager.complete(id);
                 }
             }
+        }
+
+        if task_manager.has_client()
+            && task_manager.is_idle()
+            && last_metrics.elapsed() >= Duration::from_millis(config.metrics_interval_ms)
+            && let Some(container_id) = app.selected_container_id()
+        {
+            if metrics_container.as_ref() != Some(&container_id) {
+                app.reset_metrics();
+                metrics_container = Some(container_id.clone());
+            }
+            task_manager.spawn(TaskRequest::Metrics { id: container_id });
+            last_metrics = Instant::now();
         }
 
         terminal.draw(|f| tui::draw_app(f, &mut app))?;
@@ -364,13 +402,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             app.clear_output();
                             None
                         }
+                        (KeyCode::Char('L'), _) => {
+                            app.cycle_log_level();
+                            None
+                        }
+                        (KeyCode::Char('T'), _) => {
+                            app.toggle_log_timestamps();
+                            None
+                        }
                         (KeyCode::Backspace, _) => {
                             app.dismiss_notification();
                             None
                         }
                         (KeyCode::Char(key), _) if key == shortcuts.cancel_task => {
                             if task_manager.cancel() {
-                                app.push_output("[task cancelled]");
                                 app.notify(NotificationKind::Info, "Task cancelled", false);
                             }
                             None
@@ -428,11 +473,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         (KeyCode::Right, _) => {
                             app.next_tab();
-                            None
+                            app.current_tab_refresh_request()
                         }
                         (KeyCode::Left, _) => {
                             app.previous_tab();
-                            None
+                            app.current_tab_refresh_request()
                         }
                         (KeyCode::Tab, _) => {
                             app.focus_next();
