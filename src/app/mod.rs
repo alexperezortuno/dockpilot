@@ -262,6 +262,7 @@ pub struct App {
     pub(crate) mouse_enabled: bool,
     pub(crate) refresh_status: String,
     refresh_failures: HashMap<String, u32>,
+    dirty: bool,
 }
 
 impl App {
@@ -381,6 +382,7 @@ impl App {
             mouse_enabled: false,
             refresh_status: "auto-refresh on".to_string(),
             refresh_failures: HashMap::new(),
+            dirty: true,
         };
 
         app.container_list_state.select(Some(0));
@@ -395,6 +397,7 @@ impl App {
     pub fn push_output(&mut self, line: impl Into<String>) {
         output::push(&mut self.output_lines, self.output_capacity, line);
         self.output_scroll = self.output_lines.len();
+        self.mark_dirty();
     }
 
     pub fn append_output(&mut self, lines: impl IntoIterator<Item = String>) {
@@ -412,46 +415,55 @@ impl App {
     pub fn clear_output(&mut self) {
         self.output_lines.clear();
         self.output_scroll = 0;
+        self.mark_dirty();
     }
 
     pub fn scroll_output_up(&mut self, amount: usize) {
         self.output_scroll = self.output_scroll.saturating_sub(amount);
+        self.mark_dirty();
     }
 
     pub fn scroll_output_down(&mut self, amount: usize) {
         self.output_scroll = self.output_scroll.saturating_add(amount);
+        self.mark_dirty();
     }
 
     pub fn scroll_output_home(&mut self) {
         self.output_scroll = 0;
+        self.mark_dirty();
     }
 
     pub fn scroll_output_end(&mut self) {
         self.output_scroll = self.output_lines.len();
+        self.mark_dirty();
     }
 
     pub fn set_containers(&mut self, containers: Vec<ContainerRow>) {
         let selected = self.selected_resource_id(ResourceKind::Container);
         self.containers = containers;
         self.restore_selection(&selected, ResourceKind::Container);
+        self.mark_dirty();
     }
 
     pub fn set_images(&mut self, images: Vec<ImageRow>) {
         let selected = self.selected_resource_id(ResourceKind::Image);
         self.images = images;
         self.restore_selection(&selected, ResourceKind::Image);
+        self.mark_dirty();
     }
 
     pub fn set_networks(&mut self, networks: Vec<NetworkRow>) {
         let selected = self.selected_resource_id(ResourceKind::Network);
         self.networks = networks;
         self.restore_selection(&selected, ResourceKind::Network);
+        self.mark_dirty();
     }
 
     pub fn set_volumes(&mut self, volumes: Vec<VolumeRow>) {
         let selected = self.selected_resource_id(ResourceKind::Volume);
         self.volumes = volumes;
         self.restore_selection(&selected, ResourceKind::Volume);
+        self.mark_dirty();
     }
 
     fn selected_resource_id(&self, kind: ResourceKind) -> Option<String> {
@@ -823,10 +835,12 @@ impl App {
 
     pub fn set_engine_status(&mut self, status: impl Into<String>) {
         self.engine_status = status.into();
+        self.mark_dirty();
     }
 
     pub fn set_task_status(&mut self, status: impl Into<String>) {
         self.task_status = status.into();
+        self.mark_dirty();
     }
 
     pub fn set_policy(&mut self, policy: SafetyPolicy) {
@@ -885,7 +899,17 @@ impl App {
     }
 
     pub fn tick(&mut self) {
-        self.notifications.tick();
+        if self.notifications.tick() {
+            self.mark_dirty();
+        }
+    }
+
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
+    pub fn take_dirty(&mut self) -> bool {
+        std::mem::replace(&mut self.dirty, false)
     }
 
     pub fn notify(
@@ -1003,6 +1027,7 @@ impl App {
 
     pub fn set_dashboard(&mut self, dashboard: DashboardData) {
         self.dashboard = Some(dashboard);
+        self.mark_dirty();
     }
 
     pub fn selected_container_id(&self) -> Option<String> {
@@ -1037,6 +1062,7 @@ impl App {
             self.log_lines.pop_front();
         }
         self.log_lines.push_back(line);
+        self.mark_dirty();
     }
 
     pub fn toggle_logs_paused(&mut self) {
@@ -1054,6 +1080,7 @@ impl App {
                 self.alerts.pop_front();
             }
         }
+        self.mark_dirty();
     }
 
     pub fn start_log_filter(&mut self) {
@@ -1101,6 +1128,7 @@ impl App {
 
     pub fn record_metrics(&mut self, at: std::time::Instant, sample: monitoring::RawSample) {
         self.latest_metrics = Some(self.metrics_history.push(at, sample));
+        self.mark_dirty();
     }
 
     pub fn reset_metrics(&mut self) {
@@ -1110,6 +1138,7 @@ impl App {
 
     pub fn set_health(&mut self, health: HealthSnapshot) {
         self.health = Some(health);
+        self.mark_dirty();
     }
 
     // --- Generic navigation ---
@@ -1944,8 +1973,12 @@ mod tests {
         let mut app = App::new();
         assert!(app.refresh_failed("containers"));
         assert!(!app.refresh_failed("containers"));
+        assert!(app.refresh_failed("images"));
+        assert!(!app.refresh_failed("images"));
         assert!(app.refresh_recovered("containers"));
         assert!(!app.refresh_recovered("containers"));
+        assert!(app.refresh_recovered("images"));
+        assert!(!app.refresh_recovered("images"));
     }
 
     #[test]
@@ -1961,6 +1994,31 @@ mod tests {
         assert!(!app.show_details);
         assert!(app.compact_layout);
         assert!(!app.auto_refresh);
+    }
+
+    #[test]
+    fn dirty_state_is_consumed_and_changes_invalidate_rendering() {
+        let mut app = App::new();
+        assert!(app.take_dirty());
+        assert!(!app.take_dirty());
+
+        app.toggle_output();
+        app.mark_dirty();
+        assert!(app.take_dirty());
+        assert!(!app.take_dirty());
+    }
+
+    #[test]
+    fn palette_query_keeps_j_and_k_as_text() {
+        let mut app = App::new();
+        app.start_palette();
+        app.palette_query_push('j');
+        app.palette_query_push('k');
+
+        assert!(matches!(
+            app.overlay,
+            Overlay::Palette { ref query, .. } if query == "jk"
+        ));
     }
 
     #[test]
