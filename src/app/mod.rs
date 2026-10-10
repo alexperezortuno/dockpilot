@@ -650,8 +650,9 @@ impl App {
     }
 
     pub fn start_context_menu(&mut self) {
-        if self.focus_target == FocusTarget::Table && !self.context_actions().is_empty() {
+        if !self.context_actions().is_empty() {
             self.overlay = Overlay::Context { selected: 0 };
+            self.mark_dirty();
         }
     }
 
@@ -2330,5 +2331,22 @@ mod tests {
         assert!(!app.context_actions().contains(&ContextAction::Start));
         let request = app.context_request(ContextAction::Remove).unwrap();
         assert_eq!(request.mutation(), Mutation::Destructive);
+    }
+
+    #[test]
+    fn context_menu_opens_with_actions_focus_for_the_selected_resource() {
+        let mut app = App::new();
+        app.set_containers(vec![ContainerRow {
+            id: "container".into(),
+            name: "api".into(),
+            image: "demo".into(),
+            state: "running".into(),
+            status: "Up".into(),
+        }]);
+        app.focus_target = FocusTarget::Actions;
+
+        app.start_context_menu();
+
+        assert!(matches!(app.overlay, Overlay::Context { selected: 0 }));
     }
 }
