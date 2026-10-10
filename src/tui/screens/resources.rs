@@ -12,10 +12,18 @@ use ratatui::{
 };
 
 pub fn draw(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
-    let panes = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(72), Constraint::Percentage(28)])
-        .split(area);
+    let show_secondary = app.show_details || app.focus_target == FocusTarget::Actions;
+    let panes = if show_secondary {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(72), Constraint::Percentage(28)])
+            .split(area)
+    } else {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(100), Constraint::Length(0)])
+            .split(area)
+    };
     match app.current_tab {
         Tab::Container => draw_containers(f, app, panes[0], panes[1], colors),
         Tab::Image => draw_images(f, app, panes[0], panes[1], colors),
@@ -36,6 +44,9 @@ pub fn draw_actions(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
             "  Up/Down / j/k   - Navigate focused component",
             "  Enter           - Execute / prompt for parameter",
             "  x               - Cancel active task",
+            "  r               - Manual container refresh",
+            "  R               - Toggle automatic refresh",
+            "  o / D / C       - Output / details / compact layout",
             "  c               - Clear general output",
             "  PageUp/PageDown - Scroll output",
             "  Home/End        - Output start/end",
