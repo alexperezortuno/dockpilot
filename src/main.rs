@@ -297,13 +297,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             app.cycle_theme();
                             None
                         }
-                        (KeyCode::Tab, modifiers) if modifiers.contains(KeyModifiers::CONTROL) => {
+                        (KeyCode::Right, _) => {
                             app.next_tab();
                             None
                         }
-                        (KeyCode::BackTab, modifiers)
-                            if modifiers.contains(KeyModifiers::CONTROL) =>
-                        {
+                        (KeyCode::Left, _) => {
                             app.previous_tab();
                             None
                         }
