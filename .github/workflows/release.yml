@@ -3,59 +3,142 @@ name: Release
 on:
   push:
     tags:
-      - "v*"
+      - "v0.5.0-beta.1"
+
+permissions:
+  contents: read
+
+env:
+  VERSION: 0.5.0-beta.1
 
 jobs:
   package:
-    name: Package ${{ matrix.os }}
+    name: Package ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            suffix: linux-x86_64
-          - os: macos-latest
-            suffix: macos-aarch64
-          - os: windows-latest
-            suffix: windows-x86_64
+          - name: linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+            binary: dockpilot
+          - name: macos-aarch64
+            os: macos-14
+            target: aarch64-apple-darwin
+            archive: tar.gz
+            binary: dockpilot
+          - name: macos-x86_64
+            os: macos-13
+            target: x86_64-apple-darwin
+            archive: tar.gz
+            binary: dockpilot
+          - name: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+            binary: dockpilot.exe
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo build --release
-      - name: Create Unix archive
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Validate tag and package version
+        shell: bash
+        run: |
+          test "${GITHUB_REF_NAME#v}" = "$VERSION"
+          test "$(cargo pkgid -p dockpilot | sed 's/.*#//')" = "$VERSION"
+          git fetch origin develop
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/develop
+      - name: Run checks
+        shell: bash
+        run: |
+          cargo fmt --check
+          cargo test --all-features --locked
+          cargo clippy --all-targets --all-features -- -D warnings
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Verify binary version (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: ./target/${{ matrix.target }}/release/${{ matrix.binary }} --version
+      - name: Verify binary version (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\target\${{ matrix.target }}\release\${{ matrix.binary }} --version
+      - name: Package Unix archive
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          mkdir -p package
-          cp target/release/dockpilot package/
-          cp README.md config.example.toml package/
-          tar -czf "dockpilot-${{ github.ref_name }}-${{ matrix.suffix }}.tar.gz" -C package .
-      - name: Create Windows archive
+          set -euo pipefail
+          name="dockpilot-v${VERSION}-${{ matrix.name }}"
+          mkdir -p "$name"
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "$name/"
+          cp README.md config.example.toml "$name/"
+          cp docs/releases/v${VERSION}.md "$name/RELEASE_NOTES.md"
+          tar -czf "$name.tar.gz" "$name"
+      - name: Package Windows archive
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force package | Out-Null
-          Copy-Item target/release/dockpilot.exe package/
-          Copy-Item README.md,config.example.toml package/
-          Compress-Archive -Path package/* -DestinationPath "dockpilot-${{ github.ref_name }}-${{ matrix.suffix }}.zip"
+          $name = "dockpilot-v$env:VERSION-${{ matrix.name }}"
+          New-Item -ItemType Directory -Force $name | Out-Null
+          Copy-Item "target\${{ matrix.target }}\release\${{ matrix.binary }}", README.md, config.example.toml, "docs\releases\v$env:VERSION.md" "$name\"
+          Rename-Item "$name\v$env:VERSION.md" RELEASE_NOTES.md
+          Compress-Archive -Path $name -DestinationPath "$name.zip"
       - uses: actions/upload-artifact@v4
         with:
-          name: dockpilot-${{ matrix.suffix }}
+          name: package-${{ matrix.name }}
           path: |
-            *.tar.gz
-            *.zip
+            dockpilot-v${{ env.VERSION }}-${{ matrix.name }}.tar.gz
+            dockpilot-v${{ env.VERSION }}-${{ matrix.name }}.zip
+          if-no-files-found: error
 
   publish:
-    name: Publish release
+    name: Verify and publish prerelease
     needs: package
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/download-artifact@v4
         with:
+          pattern: package-*
           path: dist
           merge-multiple: true
-      - uses: softprops/action-gh-release@v2
+      - name: Verify expected artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=(
+            "dockpilot-v${VERSION}-linux-x86_64.tar.gz"
+            "dockpilot-v${VERSION}-macos-aarch64.tar.gz"
+            "dockpilot-v${VERSION}-macos-x86_64.tar.gz"
+            "dockpilot-v${VERSION}-windows-x86_64.zip"
+          )
+          for artifact in "${expected[@]}"; do test -f "dist/$artifact"; done
+      - name: Generate and verify checksums
+        working-directory: dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum dockpilot-v${VERSION}-* > SHA256SUMS.txt
+          sha256sum --check SHA256SUMS.txt
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@v2
         with:
-          files: dist/*
+          subject-path: dist/dockpilot-v${{ env.VERSION }}-*
+      - name: Publish GitHub prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/dockpilot-v${{ env.VERSION }}-*
+            dist/SHA256SUMS.txt
+          prerelease: true
+          generate_release_notes: true
