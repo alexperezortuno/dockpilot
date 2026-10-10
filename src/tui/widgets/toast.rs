@@ -10,11 +10,12 @@ use ratatui::{
 };
 
 pub fn draw(f: &mut Frame, app: &App, area: Rect, colors: Palette) {
-    let items: Vec<_> = app.notifications.items().rev().take(3).collect();
+    let max_items = (area.height / 3).clamp(1, 3) as usize;
+    let items: Vec<_> = app.notifications.items().rev().take(max_items).collect();
     if items.is_empty() {
         return;
     }
-    let height = (items.len() as u16 * 2).min(area.height);
+    let height = items.len() as u16 * 3;
     let width = area.width.min(72);
     let rect = Rect::new(
         area.x + area.width.saturating_sub(width),
@@ -24,7 +25,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect, colors: Palette) {
     );
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints(std::iter::repeat_n(Constraint::Length(2), items.len()))
+        .constraints(std::iter::repeat_n(Constraint::Length(3), items.len()))
         .split(rect);
     for (item, row) in items.into_iter().zip(rows.iter()) {
         let color = match item.kind {
