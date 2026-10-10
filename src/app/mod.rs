@@ -49,7 +49,6 @@ pub enum ImageAction {
     Pull,
     Save,
     Load,
-    UploadTarViaSsh,
     History,
 }
 
@@ -123,12 +122,6 @@ pub enum PendingAction {
     ImagePull,
     ImageSave,
     ImageLoad,
-    ImageUploadViaSsh,
-    ImageUploadViaSshPassword {
-        host: String,
-        local_archive: String,
-        remote_path: String,
-    },
     ImageHistory,
     ImageBuild,
     ImageRebuild,
@@ -190,7 +183,6 @@ pub struct App {
     pub(crate) input_mode: bool,
     pub(crate) input_buffer: String,
     pub(crate) input_prompt: String,
-    pub(crate) input_secret: bool,
     pub(crate) pending_action: Option<PendingAction>,
 }
 
@@ -232,7 +224,6 @@ impl App {
                 ImageAction::Pull,
                 ImageAction::Save,
                 ImageAction::Load,
-                ImageAction::UploadTarViaSsh,
                 ImageAction::History,
             ],
             images: Vec::new(),
@@ -291,7 +282,6 @@ impl App {
             input_mode: false,
             input_buffer: String::new(),
             input_prompt: String::new(),
-            input_secret: false,
             pending_action: None,
         };
 
@@ -708,7 +698,6 @@ impl App {
         self.input_mode = true;
         self.input_buffer.clear();
         self.input_prompt = prompt.to_string();
-        self.input_secret = false;
         self.pending_action = Some(action);
         None
     }
@@ -717,7 +706,6 @@ impl App {
         self.input_mode = false;
         self.input_buffer.clear();
         self.input_prompt.clear();
-        self.input_secret = false;
         self.pending_action = None;
     }
 
@@ -727,7 +715,6 @@ impl App {
         self.input_mode = false;
         self.input_buffer.clear();
         self.input_prompt.clear();
-        self.input_secret = false;
 
         if value.is_empty()
             && !matches!(
@@ -860,17 +847,6 @@ impl App {
                     CommandSpec::new("docker").args(["load"]).stdin_file(value),
                 )
             }
-            PendingAction::ImageUploadViaSsh => self.upload_tar_via_ssh(value),
-            PendingAction::ImageUploadViaSshPassword {
-                host,
-                local_archive,
-                remote_path,
-            } => Some(TaskRequest::SshUpload {
-                host,
-                local_archive,
-                remote_path,
-                password: value.to_string(),
-            }),
             PendingAction::ImageHistory => {
                 self.execute_command(CommandSpec::new("docker").args(["history"]).arg(value))
             }
@@ -961,44 +937,6 @@ impl App {
             id: id.to_string(),
             operation,
         })
-    }
-
-    fn upload_tar_via_ssh(&mut self, value: &str) -> Option<TaskRequest> {
-        let mut parts = value.splitn(3, '|');
-        let Some(host) = parts.next().map(str::trim) else {
-            self.push_output("[image] use: user@host|local tar|remote path");
-            return None;
-        };
-        let Some(local_archive) = parts.next().map(str::trim) else {
-            self.push_output("[image] use: user@host|local tar|remote path");
-            return None;
-        };
-        let Some(remote_path) = parts.next().map(str::trim) else {
-            self.push_output("[image] use: user@host|local tar|remote path");
-            return None;
-        };
-        if host.is_empty() || local_archive.is_empty() || remote_path.is_empty() {
-            self.push_output("[image] SSH host, local tar, and remote path are required");
-            return None;
-        }
-        self.push_output(format!("[image] uploading tar to {}:{}", host, remote_path));
-        self.start_secret_input(
-            "SSH password:",
-            PendingAction::ImageUploadViaSshPassword {
-                host: host.to_string(),
-                local_archive: local_archive.to_string(),
-                remote_path: remote_path.to_string(),
-            },
-        )
-    }
-
-    fn start_secret_input(&mut self, prompt: &str, action: PendingAction) -> Option<TaskRequest> {
-        self.input_mode = true;
-        self.input_buffer.clear();
-        self.input_prompt = prompt.to_string();
-        self.input_secret = true;
-        self.pending_action = Some(action);
-        None
     }
 
     fn volume_archive_command(&mut self, value: &str, restore: bool) -> Option<TaskRequest> {
@@ -1140,10 +1078,6 @@ impl App {
             ImageAction::Load => {
                 self.start_input("Ruta del tar (ej: image.tar):", PendingAction::ImageLoad)
             }
-            ImageAction::UploadTarViaSsh => self.start_input(
-                "SSH host, local tar, remote path (host|local|remote):",
-                PendingAction::ImageUploadViaSsh,
-            ),
             ImageAction::History => {
                 self.start_input("Imagen a inspeccionar:", PendingAction::ImageHistory)
             }
@@ -1550,23 +1484,6 @@ mod tests {
         let request = app.execute_selected().expect("image list request");
 
         assert!(matches!(request, TaskRequest::ListImages));
-    }
-
-    #[test]
-    fn image_ssh_upload_action_creates_a_mutating_request() {
-        let mut app = App::new();
-        app.current_tab = Tab::Image;
-        app.image_list_state.select(Some(8));
-        app.execute_selected();
-        app.input_buffer = "user@example.com|/tmp/image.tar|/tmp/image.tar".to_string();
-
-        assert!(app.confirm_input().is_none());
-        assert!(app.input_secret);
-        app.input_buffer = "secret-password".to_string();
-        let request = app.confirm_input().expect("SSH image upload request");
-
-        assert_eq!(request.mutation(), Mutation::Mutating);
-        assert!(!request.description().contains("secret-password"));
     }
 
     #[test]
