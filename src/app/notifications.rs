@@ -49,10 +49,12 @@ impl NotificationQueue {
         }
     }
 
-    pub fn tick(&mut self) {
+    pub fn tick(&mut self) -> bool {
         let now = Instant::now();
+        let before = self.items.len();
         self.items
             .retain(|item| item.persistent || now.duration_since(item.created) < item.duration);
+        self.items.len() != before
     }
 
     pub fn dismiss(&mut self) {

@@ -267,4 +267,17 @@ mod tests {
             let _ = render(width, height, &mut app);
         }
     }
+
+    #[test]
+    fn output_scroll_is_clamped_to_the_visible_window() {
+        let mut app = App::new();
+        for index in 0..40 {
+            app.push_output(format!("line {index}"));
+        }
+        app.output_scroll = 40;
+
+        let _ = render(80, 12, &mut app);
+
+        assert!(app.output_scroll < 40);
+    }
 }

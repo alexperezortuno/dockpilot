@@ -22,10 +22,11 @@ pub struct TaskRecord {
 
 impl TaskRecord {
     pub fn duration(&self, now: Instant) -> Duration {
-        self.finished
-            .or(self.started)
-            .map(|at| now.saturating_duration_since(at))
-            .unwrap_or_default()
+        match (self.started, self.finished) {
+            (Some(started), Some(finished)) => finished.saturating_duration_since(started),
+            (Some(started), None) => now.saturating_duration_since(started),
+            _ => Duration::ZERO,
+        }
     }
 }
 
@@ -116,6 +117,21 @@ mod tests {
         assert_eq!(
             history.records().next().unwrap().state,
             TaskState::Cancelled
+        );
+    }
+
+    #[test]
+    fn completed_duration_is_finished_minus_started() {
+        let started = Instant::now();
+        let finished = started + Duration::from_secs(3);
+        let mut history = TaskHistory::new(2);
+        history.queue(1, "one".into());
+        history.start(1, started);
+        history.finish(1, TaskState::Completed, finished);
+
+        assert_eq!(
+            history.records().next().unwrap().duration(finished),
+            Duration::from_secs(3)
         );
     }
 }

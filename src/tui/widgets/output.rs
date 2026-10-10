@@ -19,7 +19,10 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
         app.output_lines.iter().cloned().collect()
     };
     let total = lines.len();
-    let start = app.output_scroll.min(total.saturating_sub(visible_height));
+    let max_start = total.saturating_sub(visible_height);
+    // Keep the cursor in the rendered range after new lines or filters change.
+    app.output_scroll = app.output_scroll.min(max_start);
+    let start = app.output_scroll;
     let items = lines
         .iter()
         .skip(start)
