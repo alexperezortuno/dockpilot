@@ -23,6 +23,19 @@ output_capacity = 2000
 metrics_interval_ms = 1000
 metrics_capacity = 120
 
+# Background refresh. Resource intervals are valid from 1000 to 300000 ms.
+auto_refresh = true
+container_refresh_interval_ms = 5000
+image_refresh_interval_ms = 30000
+network_refresh_interval_ms = 30000
+volume_refresh_interval_ms = 30000
+
+# Layout and input preferences (persisted in dockpilot.preferences.toml).
+show_output = true
+show_details = true
+compact_layout = false
+mouse_enabled = false
+
 # Omit a threshold to disable that alert.
 alert_cpu_percent = 85.0
 alert_memory_percent = 90.0
