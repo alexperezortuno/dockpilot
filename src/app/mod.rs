@@ -12,11 +12,19 @@ use crate::{
 use ratatui::widgets::ListState;
 use std::{collections::VecDeque, path::PathBuf};
 
+#[allow(dead_code)]
+pub mod alerts;
 pub mod commands;
+#[allow(dead_code)]
+pub mod logs;
+#[allow(dead_code)]
+pub mod monitoring;
 mod navigation;
 pub mod notifications;
 mod output;
 pub mod search;
+#[allow(dead_code)]
+pub mod task_history;
 
 const MAX_LOG_LINES: usize = 2_000;
 const MAX_EVENT_LINES: usize = 500;
@@ -220,6 +228,7 @@ pub struct App {
     pub(crate) dashboard: Option<DashboardData>,
     pub(crate) log_lines: VecDeque<String>,
     pub(crate) log_filter: String,
+    pub(crate) log_level_filter: Option<logs::LogLevel>,
     pub(crate) logs_paused: bool,
     pub(crate) event_lines: VecDeque<String>,
     pub(crate) alerts: VecDeque<String>,
@@ -235,6 +244,7 @@ pub struct App {
     pub(crate) overlay: Overlay,
     pub(crate) notifications: notifications::NotificationQueue,
     pub(crate) policy: SafetyPolicy,
+    pub(crate) task_history: task_history::TaskHistory,
 }
 
 impl App {
@@ -327,6 +337,7 @@ impl App {
             dashboard: None,
             log_lines: VecDeque::new(),
             log_filter: String::new(),
+            log_level_filter: None,
             logs_paused: false,
             event_lines: VecDeque::new(),
             alerts: VecDeque::new(),
@@ -341,6 +352,7 @@ impl App {
             overlay: Overlay::None,
             notifications: notifications::NotificationQueue::default(),
             policy: SafetyPolicy::new(false, false),
+            task_history: task_history::TaskHistory::new(100),
         };
 
         app.container_list_state.select(Some(0));
@@ -957,9 +969,25 @@ impl App {
         let filter = self.log_filter.to_lowercase();
         self.log_lines
             .iter()
-            .filter(|line| filter.is_empty() || line.to_lowercase().contains(&filter))
+            .filter(|line| {
+                (filter.is_empty() || line.to_lowercase().contains(&filter))
+                    && logs::matches_level(line, self.log_level_filter)
+            })
             .cloned()
             .collect()
+    }
+
+    pub fn queue_task(&mut self, id: u64, description: String) {
+        self.task_history.queue(id, description);
+    }
+
+    pub fn start_task(&mut self, id: u64) {
+        self.task_history.start(id, std::time::Instant::now());
+    }
+
+    pub fn finish_task(&mut self, id: u64, state: task_history::TaskState) {
+        self.task_history
+            .finish(id, state, std::time::Instant::now());
     }
 
     // --- Generic navigation ---
