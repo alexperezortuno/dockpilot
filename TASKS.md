@@ -47,6 +47,10 @@
 - [x] UX-003: Visual observability foundations.
   - Bounded elapsed-time metric calculations, periodic Docker stats extraction, CPU sparkline, alert cooldowns, visual log classification, and typed bounded task history.
   - Configuration example documents metric retention and alert thresholds.
+- [x] UX-004: Silent refresh, configurable polling, adaptive layout, and persisted preferences.
+  - Background tasks carry a typed origin and suppress successful periodic output/notifications.
+  - `r` refreshes manually, `R` toggles auto-refresh, and resource intervals are validated in TOML.
+  - Output/details visibility and compact layout can be toggled without changing keyboard navigation.
 
 ## First agent assignment
 Implement DS-001 only. Inspect the repository, run baseline checks where available, and report shell interpolation, blocking subprocess calls, hardcoded parameters, broken output scrolling and Compose working-directory behavior. Do not refactor before reporting findings.

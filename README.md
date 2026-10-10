@@ -46,6 +46,10 @@ Completed:
   - elapsed-time CPU, memory, network and block-I/O samples in bounded circular buffers.
   - periodic Bollard sampling with cancellation through the existing task manager and a CPU sparkline.
   - configurable alert thresholds and cooldowns, colored log severity, and a bounded task summary.
+- UX-004 silent refresh and TUI customization:
+  - typed user/background/system task origins suppress successful periodic output and notifications.
+  - configurable per-resource refresh intervals, `r` manual refresh, and `R` auto-refresh toggle.
+  - Output (`o`), Details (`D`), and compact (`C`) layout toggles with persisted preferences.
 
 The current TUI provides dashboard, container, image, network, volume, project, and help tabs. Legacy Docker Machine support was removed; use Docker contexts for local, TCP, or SSH engines.
 
@@ -127,6 +131,7 @@ Supported environment variables and CLI flags:
 | Docker context | `DOCKPILOT_DOCKER_CONTEXT` | `--docker-context NAME` |
 | Theme | `config.toml` | `--theme dark|light|mono` |
 | Metrics interval/capacity | `config.toml` | `metrics_interval_ms` / `metrics_capacity` |
+| Refresh/layout preferences | `config.toml` and preferences | `auto_refresh`, `*_refresh_interval_ms`, `show_output`, `show_details`, `compact_layout`, `mouse_enabled` |
 
 Polling intervals must be between 10 and 5000 milliseconds, and the project folder must exist.
 Named Docker contexts are resolved through explicit `docker context inspect` arguments and support local, TCP, and SSH endpoints. Read-only mode applies equally to the selected local or remote context.
@@ -148,6 +153,10 @@ Theme changes are cycled with the configured theme shortcut and saved to `dockpi
 | `PageUp` / `PageDown` | Scroll general output |
 | `Home` / `End` | Jump to output start/end |
 | `r` | Refresh the container table |
+| `R` | Toggle automatic refresh |
+| `o` | Show/hide Output |
+| `D` | Show/hide Details |
+| `C` | Toggle compact layout |
 | `f` | Filter/search containers |
 | `/` | Incrementally filter the current resource table |
 | `:` | Open the command palette |
@@ -175,7 +184,7 @@ The `f` filter opens the existing parameter prompt. `/` applies an incremental f
 
 Notifications are transient by default. Critical errors and pending safety confirmations remain visible until dismissed with `Backspace`; detailed task output remains in the bounded output history.
 
-Resource tabs do not auto-refresh one another. Images, networks, and volumes are refreshed only by their explicit actions; container metrics remain periodic while a container is selected.
+Background refreshes run independently per resource interval and never chain all Docker queries. Successful background refreshes update tables silently; failures are grouped until recovery. Disable them with `R`.
 
 When the container table has focus, `Enter` inspects the selected container. Lifecycle mutations use Bollard and still pass through safe-mode confirmation and read-only policy checks.
 

@@ -9,6 +9,8 @@ const DEFAULT_OUTPUT_CAPACITY: usize = 2_000;
 const MAX_OUTPUT_CAPACITY: usize = 100_000;
 const PREFERENCES_FILE: &str = "dockpilot.preferences.toml";
 const DEFAULT_METRICS_CAPACITY: usize = 120;
+const MIN_REFRESH_INTERVAL_MS: u64 = 1_000;
+const MAX_REFRESH_INTERVAL_MS: u64 = 300_000;
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq, Serialize, ValueEnum)]
 #[serde(rename_all = "lowercase")]
@@ -104,6 +106,15 @@ pub struct Config {
     pub alert_cpu_percent: Option<f64>,
     pub alert_memory_percent: Option<f64>,
     pub alert_cooldown_seconds: u64,
+    pub auto_refresh: bool,
+    pub container_refresh_interval_ms: u64,
+    pub image_refresh_interval_ms: u64,
+    pub network_refresh_interval_ms: u64,
+    pub volume_refresh_interval_ms: u64,
+    pub show_output: bool,
+    pub show_details: bool,
+    pub compact_layout: bool,
+    pub mouse_enabled: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Serialize)]
@@ -121,6 +132,15 @@ struct PartialConfig {
     alert_cpu_percent: Option<f64>,
     alert_memory_percent: Option<f64>,
     alert_cooldown_seconds: Option<u64>,
+    auto_refresh: Option<bool>,
+    container_refresh_interval_ms: Option<u64>,
+    image_refresh_interval_ms: Option<u64>,
+    network_refresh_interval_ms: Option<u64>,
+    volume_refresh_interval_ms: Option<u64>,
+    show_output: Option<bool>,
+    show_details: Option<bool>,
+    compact_layout: Option<bool>,
+    mouse_enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Serialize)]
@@ -164,6 +184,15 @@ impl Default for Config {
             alert_cpu_percent: None,
             alert_memory_percent: None,
             alert_cooldown_seconds: 30,
+            auto_refresh: true,
+            container_refresh_interval_ms: 5_000,
+            image_refresh_interval_ms: 30_000,
+            network_refresh_interval_ms: 30_000,
+            volume_refresh_interval_ms: 30_000,
+            show_output: true,
+            show_details: true,
+            compact_layout: false,
+            mouse_enabled: false,
         }
     }
 }
@@ -193,6 +222,7 @@ impl Config {
             alert_cpu_percent: None,
             alert_memory_percent: None,
             alert_cooldown_seconds: None,
+            ..PartialConfig::default()
         };
 
         resolve_layers(
@@ -207,6 +237,15 @@ impl Config {
     pub fn save_preferences(&self) -> Result<(), ConfigError> {
         let preferences = PartialConfig {
             theme: Some(self.theme),
+            auto_refresh: Some(self.auto_refresh),
+            container_refresh_interval_ms: Some(self.container_refresh_interval_ms),
+            image_refresh_interval_ms: Some(self.image_refresh_interval_ms),
+            network_refresh_interval_ms: Some(self.network_refresh_interval_ms),
+            volume_refresh_interval_ms: Some(self.volume_refresh_interval_ms),
+            show_output: Some(self.show_output),
+            show_details: Some(self.show_details),
+            compact_layout: Some(self.compact_layout),
+            mouse_enabled: Some(self.mouse_enabled),
             ..PartialConfig::default()
         };
         let contents = toml::to_string(&preferences)
@@ -233,6 +272,28 @@ impl Config {
             return Err(ConfigError::new(
                 "metrics interval must be 100..=60000 ms and capacity must be positive",
             ));
+        }
+        for (name, value) in [
+            (
+                "container_refresh_interval_ms",
+                self.container_refresh_interval_ms,
+            ),
+            ("image_refresh_interval_ms", self.image_refresh_interval_ms),
+            (
+                "network_refresh_interval_ms",
+                self.network_refresh_interval_ms,
+            ),
+            (
+                "volume_refresh_interval_ms",
+                self.volume_refresh_interval_ms,
+            ),
+        ] {
+            if !(MIN_REFRESH_INTERVAL_MS..=MAX_REFRESH_INTERVAL_MS).contains(&value) {
+                return Err(ConfigError::new(format!(
+                    "{} must be between {} and {}",
+                    name, MIN_REFRESH_INTERVAL_MS, MAX_REFRESH_INTERVAL_MS
+                )));
+            }
         }
         if !self.project_folder.is_dir() {
             return Err(ConfigError::new(format!(
@@ -271,6 +332,7 @@ fn environment_config() -> Result<PartialConfig, ConfigError> {
         alert_cpu_percent: None,
         alert_memory_percent: None,
         alert_cooldown_seconds: None,
+        ..PartialConfig::default()
     })
 }
 
@@ -336,6 +398,33 @@ fn resolve_layers(
         if let Some(value) = layer.alert_cooldown_seconds {
             config.alert_cooldown_seconds = value;
         }
+        if let Some(value) = layer.auto_refresh {
+            config.auto_refresh = value;
+        }
+        if let Some(value) = layer.container_refresh_interval_ms {
+            config.container_refresh_interval_ms = value;
+        }
+        if let Some(value) = layer.image_refresh_interval_ms {
+            config.image_refresh_interval_ms = value;
+        }
+        if let Some(value) = layer.network_refresh_interval_ms {
+            config.network_refresh_interval_ms = value;
+        }
+        if let Some(value) = layer.volume_refresh_interval_ms {
+            config.volume_refresh_interval_ms = value;
+        }
+        if let Some(value) = layer.show_output {
+            config.show_output = value;
+        }
+        if let Some(value) = layer.show_details {
+            config.show_details = value;
+        }
+        if let Some(value) = layer.compact_layout {
+            config.compact_layout = value;
+        }
+        if let Some(value) = layer.mouse_enabled {
+            config.mouse_enabled = value;
+        }
     }
     config.validate()?;
     Ok(config)
@@ -394,6 +483,15 @@ mod tests {
             alert_cpu_percent: None,
             alert_memory_percent: None,
             alert_cooldown_seconds: 30,
+            auto_refresh: true,
+            container_refresh_interval_ms: 5_000,
+            image_refresh_interval_ms: 30_000,
+            network_refresh_interval_ms: 30_000,
+            volume_refresh_interval_ms: 30_000,
+            show_output: true,
+            show_details: true,
+            compact_layout: false,
+            mouse_enabled: false,
         };
         let file = PartialConfig {
             project_folder: Some(PathBuf::from(".")),
@@ -409,6 +507,7 @@ mod tests {
             alert_cpu_percent: None,
             alert_memory_percent: None,
             alert_cooldown_seconds: None,
+            ..PartialConfig::default()
         };
         let environment = PartialConfig {
             project_folder: None,
@@ -424,6 +523,7 @@ mod tests {
             alert_cpu_percent: None,
             alert_memory_percent: None,
             alert_cooldown_seconds: None,
+            ..PartialConfig::default()
         };
         let command_line = PartialConfig {
             project_folder: Some(PathBuf::from(".")),
@@ -439,6 +539,7 @@ mod tests {
             alert_cpu_percent: None,
             alert_memory_percent: None,
             alert_cooldown_seconds: None,
+            ..PartialConfig::default()
         };
 
         let config = resolve_layers(
@@ -477,11 +578,35 @@ mod tests {
     }
 
     #[test]
+    fn refresh_interval_bounds_are_rejected() {
+        let result = resolve_layers(
+            Config::default(),
+            PartialConfig {
+                image_refresh_interval_ms: Some(999),
+                ..PartialConfig::default()
+            },
+            PartialConfig::default(),
+            PartialConfig::default(),
+            PartialConfig::default(),
+        );
+
+        assert_eq!(
+            result,
+            Err(ConfigError::new(
+                "image_refresh_interval_ms must be between 1000 and 300000"
+            ))
+        );
+    }
+
+    #[test]
     fn theme_and_shortcuts_are_loaded_from_layers() {
         let config = resolve_layers(
             Config::default(),
             PartialConfig {
                 theme: Some(ThemeName::Light),
+                auto_refresh: Some(false),
+                show_output: Some(false),
+                container_refresh_interval_ms: Some(2_000),
                 shortcuts: Some(PartialShortcuts {
                     theme: Some("z".to_string()),
                     ..PartialShortcuts::default()
@@ -496,5 +621,8 @@ mod tests {
 
         assert_eq!(config.theme, ThemeName::Light);
         assert_eq!(config.shortcuts.theme, 'z');
+        assert!(!config.auto_refresh);
+        assert!(!config.show_output);
+        assert_eq!(config.container_refresh_interval_ms, 2_000);
     }
 }
