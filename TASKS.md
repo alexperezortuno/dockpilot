@@ -29,8 +29,8 @@
 - [x] DS-020: Optional volume backup/restore with consistency warnings.
 
 ## P4
-- [ ] DS-021: Noninteractive CLI and JSON output.
-- [ ] DS-022: CI, integration tests, documentation and release packaging.
+- [x] DS-021: Noninteractive CLI and JSON output.
+- [x] DS-022: CI, integration tests, documentation and release packaging.
 
 ## First agent assignment
 Implement DS-001 only. Inspect the repository, run baseline checks where available, and report shell interpolation, blocking subprocess calls, hardcoded parameters, broken output scrolling and Compose working-directory behavior. Do not refactor before reporting findings.

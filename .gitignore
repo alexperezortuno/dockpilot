@@ -3,5 +3,6 @@
 .agents/
 .opencode/
 graphify-out
-AGENTS.md
+AGENTS.mdq
 skills-lock.json
+*.tar
