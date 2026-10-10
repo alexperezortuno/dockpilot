@@ -32,5 +32,8 @@
 - [x] DS-021: Noninteractive CLI and JSON output.
 - [x] DS-022: CI, integration tests, documentation and release packaging.
 
+## UX
+- [x] UX-001: Responsive layout, explicit focus, contextual details, and adaptive TUI states.
+
 ## First agent assignment
 Implement DS-001 only. Inspect the repository, run baseline checks where available, and report shell interpolation, blocking subprocess calls, hardcoded parameters, broken output scrolling and Compose working-directory behavior. Do not refactor before reporting findings.
