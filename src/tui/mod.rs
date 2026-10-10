@@ -243,7 +243,8 @@ mod tests {
                 "ready",
                 false,
             );
-            let _ = render(width, height, &mut app);
+            let output = render(width, height, &mut app);
+            assert!(output.contains("ready"));
         }
     }
 }
