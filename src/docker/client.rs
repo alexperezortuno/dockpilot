@@ -75,6 +75,14 @@ pub struct ContainerStats {
     pub memory_limit: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HealthSnapshot {
+    pub id: String,
+    pub status: String,
+    pub restart_count: i64,
+    pub started_at: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DashboardData {
     pub engine_version: String,
@@ -284,6 +292,34 @@ pub async fn inspect_container(client: &Docker, id: &str) -> Result<Vec<String>,
         format!("[inspect] state: {}", state),
         String::new(),
     ])
+}
+
+pub async fn container_health(client: &Docker, id: &str) -> Result<HealthSnapshot, String> {
+    let container = client
+        .inspect_container(
+            id,
+            None::<bollard::query_parameters::InspectContainerOptions>,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    let state = container.state.as_ref();
+    let running = state.and_then(|state| state.running).unwrap_or(false);
+    let status = if !running {
+        "stopped".to_string()
+    } else {
+        state
+            .and_then(|state| state.health.as_ref())
+            .and_then(|health| health.status.as_ref())
+            .map(ToString::to_string)
+            .filter(|status| status != "none" && !status.is_empty())
+            .unwrap_or_else(|| "no healthcheck".to_string())
+    };
+    Ok(HealthSnapshot {
+        id: id.to_string(),
+        status,
+        restart_count: container.restart_count.unwrap_or(0),
+        started_at: state.and_then(|state| state.started_at.clone()),
+    })
 }
 
 pub async fn apply_container_lifecycle(
