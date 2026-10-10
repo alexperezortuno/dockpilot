@@ -45,7 +45,7 @@
   - Bounded expiring notifications integrated with task results and persistent critical errors.
    - Tests for command filtering, search restoration, selection preservation, context policy, notification expiration, and 120x40/80x24/60x20 rendering.
 - [x] UX-003: Visual observability foundations.
-  - Bounded elapsed-time metric calculations, Docker stats extraction, alert cooldowns, visual log classification, and typed bounded task history primitives.
+  - Bounded elapsed-time metric calculations, periodic Docker stats extraction, CPU sparkline, alert cooldowns, visual log classification, and typed bounded task history.
   - Configuration example documents metric retention and alert thresholds.
 
 ## First agent assignment
