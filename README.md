@@ -4,7 +4,29 @@ Dockpilot is a keyboard-first Rust TUI for managing Docker Engine and Docker Com
 
 ## Current status
 
-The project is in **Phase 2: Container-first MVP**.
+Dockpilot `0.5.0-beta.1` is the first public beta candidate. It is suitable for evaluation, but behavior and packaging may change before a stable release.
+
+Supported release targets:
+
+- Linux x86_64
+- macOS Apple Silicon
+- macOS Intel
+- Windows x86_64
+
+The release workflow builds all four targets. A target is not considered tested until it has been exercised on the corresponding platform.
+
+## Quick install
+
+Download a release archive and verify `SHA256SUMS.txt`, or review the installer before running it:
+
+```bash
+curl --fail --location https://raw.githubusercontent.com/alexperezortuno/dockpilot/v0.5.0-beta.1/scripts/install.sh -o /tmp/dockpilot-install.sh
+less /tmp/dockpilot-install.sh
+bash /tmp/dockpilot-install.sh 0.5.0-beta.1
+dockpilot --version
+```
+
+Manual installation, Windows PowerShell instructions, checksum verification, and source installation are documented in [docs/installation.md](docs/installation.md).
 
 Completed:
 
@@ -80,7 +102,7 @@ cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-Current validation includes 62 unit tests covering application navigation, UX layout/focus rendering, dirty rendering, JSON query dispatch, guarded volume backup dispatch, disk usage policy, bounded output/events/alerts, independent refresh incidents, network/volume listing dispatch, theme and shortcut configuration, context endpoint parsing, image listing dispatch, Compose profile dispatch, dashboard requests, container filtering and inspection, bounded logs, configuration precedence, terminal restoration, safe command arguments, task cancellation, lifecycle policy, task duration, palette text input, and engine status.
+Current validation includes 66 unit tests covering application navigation, UX layout/focus rendering, dirty rendering, JSON query dispatch, guarded volume backup dispatch, disk usage policy, bounded output/events/alerts, independent refresh incidents, network/volume listing dispatch, theme and shortcut configuration, context endpoint parsing, image listing dispatch, Compose profile dispatch, dashboard requests, container filtering and inspection, bounded logs, configuration precedence, terminal restoration, safe command arguments, task cancellation, lifecycle policy, task duration, palette text input, context actions, output scrolling, and engine status.
 
 UX-001 uses `Tab`/`Shift+Tab` for ordered pane focus and `Left`/`Right` for resource tabs. The `m` shortcut remains available for focus changes. The current focus is shown in the footer and selected resource details appear beside focused tables.
 
@@ -96,7 +118,33 @@ The manual `Docker integration` workflow runs the same ignored test in GitHub Ac
 
 ## Releases
 
-Pushing a tag matching `v*` runs the release workflow and publishes archives for Linux x86_64, macOS Apple Silicon, and Windows x86_64. Each archive contains the `dockpilot` binary, `README.md`, and `config.example.toml`.
+Dockpilot follows SemVer. Beta versions use `MAJOR.MINOR.PATCH-beta.N`; stable releases use `MAJOR.MINOR.PATCH`. The package version in `Cargo.toml` is the source of truth. A matching `v0.5.0-beta.1` tag is required before the release workflow runs. It creates a GitHub prerelease only after all builds, tests, artifact checks, SHA-256 verification, and provenance attestation steps succeed. See [docs/release-process.md](docs/release-process.md).
+
+## Documentation
+
+- [Installation](docs/installation.md)
+- [Quickstart](docs/quickstart.md)
+- [Configuration](docs/configuration.md)
+- [Keyboard shortcuts](docs/keyboard-shortcuts.md)
+- [Docker contexts](docs/docker-contexts.md)
+- [Security](docs/security.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Development](docs/development.md)
+- [Testing](docs/testing.md)
+- [Platform compatibility](docs/platform-compatibility.md)
+- [Release process](docs/release-process.md)
+- [Beta release notes](docs/releases/v0.5.0-beta.1.md)
+
+## Known limitations
+
+- Docker Engine and Docker Compose are required for Docker operations.
+- Docker integration tests require a reachable Engine and are opt-in.
+- The beta has no selected open-source license file yet; licensing must be approved by the repository owner before adding one.
+- There is no signed native installer in this beta. Archives include SHA-256 checksums and CI provenance attestations.
+
+## Reporting bugs
+
+Use the GitHub bug report template. Include the Dockpilot version, OS and architecture, Docker version, safe reproduction steps, and sanitized logs. Never include credentials, private keys, or Docker socket data.
 
 ## JSON CLI
 
