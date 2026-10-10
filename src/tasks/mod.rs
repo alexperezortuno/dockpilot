@@ -55,6 +55,13 @@ pub enum TaskRequest {
     Events,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskOrigin {
+    User,
+    Background,
+    System,
+}
+
 impl TaskRequest {
     pub fn mutation(&self) -> Mutation {
         match self {
@@ -124,6 +131,7 @@ pub enum TaskEvent {
     Started {
         id: u64,
         description: String,
+        origin: TaskOrigin,
     },
     Progress {
         id: u64,
@@ -211,6 +219,10 @@ impl TaskManager {
     }
 
     pub fn spawn(&mut self, request: TaskRequest) -> bool {
+        self.spawn_with_origin(request, TaskOrigin::User)
+    }
+
+    pub fn spawn_with_origin(&mut self, request: TaskRequest, origin: TaskOrigin) -> bool {
         if self.active.is_some() {
             return false;
         }
@@ -222,7 +234,11 @@ impl TaskManager {
         let handle = tokio::spawn(async move {
             let description = request.description();
             if sender
-                .send(TaskEvent::Started { id, description })
+                .send(TaskEvent::Started {
+                    id,
+                    description,
+                    origin,
+                })
                 .await
                 .is_err()
             {
@@ -349,25 +365,19 @@ impl TaskManager {
                         }
                         Err(error) => {
                             let _ = sender
-                                .send(TaskEvent::Finished {
+                                .send(TaskEvent::Failed {
                                     id,
-                                    lines: vec![
-                                        format!("[docker] error listing containers: {}", error),
-                                        String::new(),
-                                    ],
+                                    message: format!("error listing containers: {}", error),
                                 })
                                 .await;
                         }
                     },
                     None => {
                         let _ = sender
-                            .send(TaskEvent::Finished {
+                            .send(TaskEvent::Failed {
                                 id,
-                                lines: vec![
-                                    "[docker] Engine disconnected; cannot list containers"
-                                        .to_string(),
-                                    String::new(),
-                                ],
+                                message: "Docker Engine disconnected; cannot list containers"
+                                    .to_string(),
                             })
                             .await;
                     }
@@ -379,24 +389,19 @@ impl TaskManager {
                         }
                         Err(error) => {
                             let _ = sender
-                                .send(TaskEvent::Finished {
+                                .send(TaskEvent::Failed {
                                     id,
-                                    lines: vec![
-                                        format!("[docker] image list failed: {}", error),
-                                        String::new(),
-                                    ],
+                                    message: format!("image list failed: {}", error),
                                 })
                                 .await;
                         }
                     },
                     None => {
                         let _ = sender
-                            .send(TaskEvent::Finished {
+                            .send(TaskEvent::Failed {
                                 id,
-                                lines: vec![
-                                    "[docker] Engine disconnected; cannot list images".to_string(),
-                                    String::new(),
-                                ],
+                                message: "Docker Engine disconnected; cannot list images"
+                                    .to_string(),
                             })
                             .await;
                     }
@@ -408,25 +413,19 @@ impl TaskManager {
                         }
                         Err(error) => {
                             let _ = sender
-                                .send(TaskEvent::Finished {
+                                .send(TaskEvent::Failed {
                                     id,
-                                    lines: vec![
-                                        format!("[docker] network list failed: {}", error),
-                                        String::new(),
-                                    ],
+                                    message: format!("network list failed: {}", error),
                                 })
                                 .await;
                         }
                     },
                     None => {
                         let _ = sender
-                            .send(TaskEvent::Finished {
+                            .send(TaskEvent::Failed {
                                 id,
-                                lines: vec![
-                                    "[docker] Engine disconnected; cannot list networks"
-                                        .to_string(),
-                                    String::new(),
-                                ],
+                                message: "Docker Engine disconnected; cannot list networks"
+                                    .to_string(),
                             })
                             .await;
                     }
@@ -438,24 +437,19 @@ impl TaskManager {
                         }
                         Err(error) => {
                             let _ = sender
-                                .send(TaskEvent::Finished {
+                                .send(TaskEvent::Failed {
                                     id,
-                                    lines: vec![
-                                        format!("[docker] volume list failed: {}", error),
-                                        String::new(),
-                                    ],
+                                    message: format!("volume list failed: {}", error),
                                 })
                                 .await;
                         }
                     },
                     None => {
                         let _ = sender
-                            .send(TaskEvent::Finished {
+                            .send(TaskEvent::Failed {
                                 id,
-                                lines: vec![
-                                    "[docker] Engine disconnected; cannot list volumes".to_string(),
-                                    String::new(),
-                                ],
+                                message: "Docker Engine disconnected; cannot list volumes"
+                                    .to_string(),
                             })
                             .await;
                     }
@@ -806,7 +800,7 @@ impl Drop for TaskManager {
 
 #[cfg(test)]
 mod tests {
-    use super::{TaskManager, TaskRequest};
+    use super::{TaskEvent, TaskManager, TaskOrigin, TaskRequest};
     use crate::{
         docker::{CommandSpec, client::ContainerLifecycle},
         security::Mutation,
@@ -826,6 +820,29 @@ mod tests {
         }));
         assert!(manager.cancel());
         assert!(!manager.cancel());
+    }
+
+    #[tokio::test]
+    async fn task_origin_is_carried_by_started_event() {
+        let mut manager = TaskManager::new(4);
+        assert!(manager.spawn_with_origin(
+            TaskRequest::Command {
+                spec: CommandSpec::new("docker"),
+                mutation: Mutation::ReadOnly,
+            },
+            TaskOrigin::Background,
+        ));
+
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+            if let Some(TaskEvent::Started { origin, .. }) = manager.try_next() {
+                assert_eq!(origin, TaskOrigin::Background);
+                manager.cancel();
+                return;
+            }
+        }
+        manager.cancel();
+        panic!("task did not publish its origin");
     }
 
     #[test]

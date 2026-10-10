@@ -11,7 +11,10 @@ use crate::{
     tasks::TaskRequest,
 };
 use ratatui::widgets::ListState;
-use std::{collections::VecDeque, path::PathBuf};
+use std::{
+    collections::{HashMap, VecDeque},
+    path::PathBuf,
+};
 
 #[allow(dead_code)]
 pub mod alerts;
@@ -252,6 +255,13 @@ pub struct App {
     pub(crate) metrics_history: monitoring::MetricsHistory,
     pub(crate) latest_metrics: Option<monitoring::MetricSample>,
     pub(crate) health: Option<HealthSnapshot>,
+    pub(crate) auto_refresh: bool,
+    pub(crate) show_output: bool,
+    pub(crate) show_details: bool,
+    pub(crate) compact_layout: bool,
+    pub(crate) mouse_enabled: bool,
+    pub(crate) refresh_status: String,
+    refresh_failures: HashMap<String, u32>,
 }
 
 impl App {
@@ -364,6 +374,13 @@ impl App {
             metrics_history: monitoring::MetricsHistory::new(120),
             latest_metrics: None,
             health: None,
+            auto_refresh: true,
+            show_output: true,
+            show_details: true,
+            compact_layout: false,
+            mouse_enabled: false,
+            refresh_status: "auto-refresh on".to_string(),
+            refresh_failures: HashMap::new(),
         };
 
         app.container_list_state.select(Some(0));
@@ -814,6 +831,57 @@ impl App {
 
     pub fn set_policy(&mut self, policy: SafetyPolicy) {
         self.policy = policy;
+    }
+
+    pub fn set_preferences(
+        &mut self,
+        auto_refresh: bool,
+        show_output: bool,
+        show_details: bool,
+        compact_layout: bool,
+        mouse_enabled: bool,
+    ) {
+        self.auto_refresh = auto_refresh;
+        self.show_output = show_output;
+        self.show_details = show_details;
+        self.compact_layout = compact_layout;
+        self.mouse_enabled = mouse_enabled;
+        self.refresh_status = if auto_refresh {
+            "auto-refresh on".to_string()
+        } else {
+            "auto-refresh off".to_string()
+        };
+    }
+
+    pub fn toggle_auto_refresh(&mut self) {
+        self.auto_refresh = !self.auto_refresh;
+        self.refresh_status = if self.auto_refresh {
+            "auto-refresh on".to_string()
+        } else {
+            "auto-refresh off".to_string()
+        };
+    }
+
+    pub fn toggle_output(&mut self) {
+        self.show_output = !self.show_output;
+    }
+
+    pub fn toggle_details(&mut self) {
+        self.show_details = !self.show_details;
+    }
+
+    pub fn toggle_compact_layout(&mut self) {
+        self.compact_layout = !self.compact_layout;
+    }
+
+    pub fn refresh_failed(&mut self, key: &str) -> bool {
+        let count = self.refresh_failures.entry(key.to_string()).or_default();
+        *count += 1;
+        *count == 1
+    }
+
+    pub fn refresh_recovered(&mut self, key: &str) -> bool {
+        self.refresh_failures.remove(key).is_some()
     }
 
     pub fn tick(&mut self) {
@@ -1869,6 +1937,30 @@ mod tests {
             Some("event 100")
         );
         assert_eq!(app.alerts.front().map(String::as_str), Some("alert 500"));
+    }
+
+    #[test]
+    fn repeated_refresh_failures_group_until_recovery() {
+        let mut app = App::new();
+        assert!(app.refresh_failed("containers"));
+        assert!(!app.refresh_failed("containers"));
+        assert!(app.refresh_recovered("containers"));
+        assert!(!app.refresh_recovered("containers"));
+    }
+
+    #[test]
+    fn layout_preferences_toggle_without_changing_focus() {
+        let mut app = App::new();
+        let focus = app.focus_target;
+        app.toggle_output();
+        app.toggle_details();
+        app.toggle_compact_layout();
+        app.toggle_auto_refresh();
+        assert_eq!(app.focus_target, focus);
+        assert!(!app.show_output);
+        assert!(!app.show_details);
+        assert!(app.compact_layout);
+        assert!(!app.auto_refresh);
     }
 
     #[test]
