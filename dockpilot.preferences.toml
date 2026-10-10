@@ -1,0 +1,10 @@
+theme = "dark"
+auto_refresh = true
+container_refresh_interval_ms = 5000
+image_refresh_interval_ms = 30000
+network_refresh_interval_ms = 30000
+volume_refresh_interval_ms = 30000
+show_output = true
+show_details = true
+compact_layout = false
+mouse_enabled = false
