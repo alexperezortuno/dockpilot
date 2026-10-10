@@ -553,22 +553,22 @@ impl App {
 
     #[cfg(test)]
     pub fn start_container_filter(&mut self) {
-        self.start_input("Filtro de contenedores:", PendingAction::ContainerFilter);
+        self.start_input("Container filter:", PendingAction::ContainerFilter);
     }
 
     pub fn start_filter(&mut self) {
         match self.current_tab {
             Tab::Container => {
-                self.start_input("Filtro de contenedores:", PendingAction::ContainerFilter);
+                self.start_input("Container filter:", PendingAction::ContainerFilter);
             }
             Tab::Image => {
-                self.start_input("Filtro de imagenes:", PendingAction::ImageFilter);
+                self.start_input("Image filter:", PendingAction::ImageFilter);
             }
             Tab::Network => {
-                self.start_input("Filtro de redes:", PendingAction::NetworkFilter);
+                self.start_input("Network filter:", PendingAction::NetworkFilter);
             }
             Tab::Volume => {
-                self.start_input("Filtro de volumenes:", PendingAction::VolumeFilter);
+                self.start_input("Volume filter:", PendingAction::VolumeFilter);
             }
             _ => {}
         }
@@ -968,7 +968,7 @@ impl App {
                 entry
                     .reason
                     .clone()
-                    .unwrap_or_else(|| "acción no disponible".to_string()),
+                    .unwrap_or_else(|| "action unavailable".to_string()),
                 false,
             );
             return None;
@@ -1085,7 +1085,7 @@ impl App {
     }
 
     pub fn start_log_filter(&mut self) {
-        self.start_input("Filtro de logs:", PendingAction::LogFilter);
+        self.start_input("Log filter:", PendingAction::LogFilter);
     }
 
     pub fn cycle_log_level(&mut self) {
@@ -1322,7 +1322,7 @@ impl App {
                 )
             )
         {
-            self.push_output("[entrada cancelada: valor vacío]");
+            self.push_output("[input cancelled: empty value]");
             return None;
         }
 
@@ -1446,7 +1446,7 @@ impl App {
                 self.execute_command(CommandSpec::new("docker").args(["history"]).arg(value))
             }
             PendingAction::ImageBuild => {
-                // value = "tag context"  p.ej. "myimage ."
+                // value = "tag context" e.g. "myimage ."
                 let mut parts = value.splitn(2, ' ');
                 let tag = parts.next().unwrap_or("myimage");
                 let ctx = parts.next().unwrap_or(".");
@@ -1492,7 +1492,7 @@ impl App {
             PendingAction::ProjectSetFolder => {
                 self.project_folder = value.to_string();
                 let folder = self.project_folder.clone();
-                self.push_output(format!("[proyecto] carpeta establecida: {}", folder));
+                self.push_output(format!("[project] folder set: {}", folder));
                 self.execute_command(CommandSpec::new("ls").args(["-la"]).arg(folder))
             }
             PendingAction::ComposeProfileUp => {
@@ -1606,75 +1606,73 @@ impl App {
         match action {
             ContainerAction::StartAll => Some(TaskRequest::StartAll),
             ContainerAction::Start => {
-                self.start_input("Contenedor a iniciar:", PendingAction::ContainerStart)
+                self.start_input("Container to start:", PendingAction::ContainerStart)
             }
             ContainerAction::StopAll => Some(TaskRequest::StopAll),
             ContainerAction::Stop => {
-                self.start_input("Contenedor a detener:", PendingAction::ContainerStop)
+                self.start_input("Container to stop:", PendingAction::ContainerStop)
             }
             ContainerAction::Restart => {
-                self.start_input("Contenedor a reiniciar:", PendingAction::ContainerRestart)
+                self.start_input("Container to restart:", PendingAction::ContainerRestart)
             }
             ContainerAction::ListAll => {
                 self.execute_command(CommandSpec::new("docker").args(["ps", "-a"]))
             }
             ContainerAction::List => self.execute_command(CommandSpec::new("docker").args(["ps"])),
             ContainerAction::Logs => {
-                self.start_input("Contenedor para ver logs:", PendingAction::ContainerLogs)
+                self.start_input("Container to view logs:", PendingAction::ContainerLogs)
             }
             ContainerAction::Create => self.start_input(
-                "Nombre e imagen (ej: test nginx):",
+                "Name and image (e.g. test nginx):",
                 PendingAction::ContainerCreate,
             ),
             ContainerAction::Remove => self.start_input(
-                "Contenedor a eliminar (ID o nombre):",
+                "Container to remove (ID or name):",
                 PendingAction::ContainerRemove,
             ),
             ContainerAction::Top => {
-                self.start_input("Contenedor para top:", PendingAction::ContainerTop)
+                self.start_input("Container for top:", PendingAction::ContainerTop)
             }
             ContainerAction::Diff => {
-                self.start_input("Contenedor para diff:", PendingAction::ContainerDiff)
+                self.start_input("Container for diff:", PendingAction::ContainerDiff)
             }
             ContainerAction::Pause => {
-                self.start_input("Contenedor a pausar:", PendingAction::ContainerPause)
+                self.start_input("Container to pause:", PendingAction::ContainerPause)
             }
             ContainerAction::Unpause => {
-                self.start_input("Contenedor a reanudar:", PendingAction::ContainerUnpause)
+                self.start_input("Container to unpause:", PendingAction::ContainerUnpause)
             }
             ContainerAction::Update => {
-                self.start_input("Contenedor a actualizar:", PendingAction::ContainerUpdate)
+                self.start_input("Container to update:", PendingAction::ContainerUpdate)
             }
             ContainerAction::Wait => {
-                self.start_input("Contenedor a esperar:", PendingAction::ContainerWait)
+                self.start_input("Container to wait for:", PendingAction::ContainerWait)
             }
         }
     }
 
     fn run_image_action(&mut self, action: &ImageAction) -> Option<TaskRequest> {
         match action {
-            ImageAction::Build => {
-                self.start_input("Tag y contexto (ej: myimage .):", PendingAction::ImageBuild)
-            }
+            ImageAction::Build => self.start_input(
+                "Tag and context (e.g. myimage .):",
+                PendingAction::ImageBuild,
+            ),
             ImageAction::Rebuild => self.start_input(
-                "Tag y contexto (ej: myimage .):",
+                "Tag and context (e.g. myimage .):",
                 PendingAction::ImageRebuild,
             ),
             ImageAction::List => Some(TaskRequest::ListImages),
-            ImageAction::Remove => self.start_input(
-                "Imagen a eliminar (ID o nombre):",
-                PendingAction::ImageRemove,
-            ),
-            ImageAction::Push => {
-                self.start_input("Imagen a subir (tag):", PendingAction::ImagePush)
+            ImageAction::Remove => {
+                self.start_input("Image to remove (ID or name):", PendingAction::ImageRemove)
             }
-            ImageAction::Pull => self.start_input("Imagen a descargar:", PendingAction::ImagePull),
-            ImageAction::Save => self.start_input("Imagen a guardar:", PendingAction::ImageSave),
+            ImageAction::Push => self.start_input("Image to push (tag):", PendingAction::ImagePush),
+            ImageAction::Pull => self.start_input("Image to pull:", PendingAction::ImagePull),
+            ImageAction::Save => self.start_input("Image to save:", PendingAction::ImageSave),
             ImageAction::Load => {
-                self.start_input("Ruta del tar (ej: image.tar):", PendingAction::ImageLoad)
+                self.start_input("Tar path (e.g. image.tar):", PendingAction::ImageLoad)
             }
             ImageAction::History => {
-                self.start_input("Imagen a inspeccionar:", PendingAction::ImageHistory)
+                self.start_input("Image to inspect:", PendingAction::ImageHistory)
             }
         }
     }
@@ -1683,10 +1681,10 @@ impl App {
         match action {
             NetworkAction::List => Some(TaskRequest::ListNetworks),
             NetworkAction::Create => {
-                self.start_input("Nombre de la nueva red:", PendingAction::NetworkCreate)
+                self.start_input("New network name:", PendingAction::NetworkCreate)
             }
             NetworkAction::Remove => {
-                self.start_input("Nombre de la red a eliminar:", PendingAction::NetworkRemove)
+                self.start_input("Network name to remove:", PendingAction::NetworkRemove)
             }
         }
     }
@@ -1695,18 +1693,17 @@ impl App {
         match action {
             VolumeAction::List => Some(TaskRequest::ListVolumes),
             VolumeAction::Create => {
-                self.start_input("Nombre del nuevo volumen:", PendingAction::VolumeCreate)
+                self.start_input("New volume name:", PendingAction::VolumeCreate)
             }
-            VolumeAction::Remove => self.start_input(
-                "Nombre del volumen a eliminar:",
-                PendingAction::VolumeRemove,
-            ),
+            VolumeAction::Remove => {
+                self.start_input("Volume name to remove:", PendingAction::VolumeRemove)
+            }
             VolumeAction::Backup => self.start_input(
-                "Volumen y archivo (volumen|ruta.tar.gz):",
+                "Volume and file (volume|path.tar.gz):",
                 PendingAction::VolumeBackup,
             ),
             VolumeAction::Restore => self.start_input(
-                "Volumen y archivo (volumen|ruta.tar.gz):",
+                "Volume and file (volume|path.tar.gz):",
                 PendingAction::VolumeRestore,
             ),
         }
@@ -1714,13 +1711,12 @@ impl App {
 
     fn run_project_action(&mut self, action: &ProjectAction) -> Option<TaskRequest> {
         match action {
-            ProjectAction::SetFolder => self.start_input(
-                "Ruta de la carpeta del proyecto:",
-                PendingAction::ProjectSetFolder,
-            ),
+            ProjectAction::SetFolder => {
+                self.start_input("Project folder path:", PendingAction::ProjectSetFolder)
+            }
             ProjectAction::ComposeUp => self.execute_compose(&["compose", "up", "-d"]),
             ProjectAction::ComposeUpProfile => {
-                self.start_input("Perfil Compose:", PendingAction::ComposeProfileUp)
+                self.start_input("Compose profile:", PendingAction::ComposeProfileUp)
             }
             ProjectAction::ComposeDown => self.execute_compose_down(),
             ProjectAction::ComposeConfig => self.execute_compose_read_only(&["compose", "config"]),
@@ -1863,7 +1859,7 @@ mod tests {
         assert!(app.pending_action.is_none());
         assert_eq!(
             app.output_lines.back().map(String::as_str),
-            Some("[entrada cancelada: valor vacío]")
+            Some("[input cancelled: empty value]")
         );
     }
 
