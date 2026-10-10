@@ -1,5 +1,10 @@
+pub mod layout;
+pub mod screens;
 pub mod terminal;
+pub mod widgets;
 
+use self::layout::areas;
+use self::widgets::status::footer_line;
 use crate::app::{
     App, ContainerAction, ImageAction, NetworkAction, ProjectAction, Tab, VolumeAction,
 };
@@ -41,26 +46,7 @@ fn palette(theme: ThemeName) -> Palette {
 pub fn draw_app(f: &mut Frame, app: &mut App) {
     let size = f.area();
     let colors = palette(app.theme);
-
-    // If we are in input mode, we reserve 3 lines at the bottom for the prompt.
-    let (main_area, input_area) = if app.input_mode {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(10), Constraint::Length(3)])
-            .split(size);
-        (chunks[0], Some(chunks[1]))
-    } else {
-        (size, None)
-    };
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Length(15),
-            Constraint::Min(10),
-        ])
-        .split(main_area);
+    let layout = areas(size, app.input_mode);
 
     // Tabs
     let tab_titles = [
@@ -97,45 +83,44 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
                 .add_modifier(Modifier::BOLD),
         );
 
-    f.render_widget(tabs, chunks[0]);
+    f.render_widget(tabs, layout.header);
+
+    let footer = footer_line(app.focus_label(), &app.task_status);
+    f.render_widget(Paragraph::new(footer), layout.footer);
 
     if matches!(app.current_tab, Tab::Dashboard) {
-        draw_dashboard(f, app, chunks[1]);
-        draw_output(f, app, chunks[2]);
+        draw_dashboard(f, app, layout.content);
+        draw_output(f, app, layout.output);
         return;
     }
 
     if matches!(app.current_tab, Tab::Image) {
-        draw_image_tab(f, app, chunks[1], colors);
-        draw_output(f, app, chunks[2]);
-        if let Some(area) = input_area {
+        draw_image_tab(f, app, layout.content, colors);
+        if let Some(area) = layout.input {
             draw_input(f, app, area);
         }
         return;
     }
 
     if matches!(app.current_tab, Tab::Network) {
-        draw_network_tab(f, app, chunks[1], colors);
-        draw_output(f, app, chunks[2]);
-        if let Some(area) = input_area {
+        draw_network_tab(f, app, layout.content, colors);
+        if let Some(area) = layout.input {
             draw_input(f, app, area);
         }
         return;
     }
 
     if matches!(app.current_tab, Tab::Volume) {
-        draw_volume_tab(f, app, chunks[1], colors);
-        draw_output(f, app, chunks[2]);
-        if let Some(area) = input_area {
+        draw_volume_tab(f, app, layout.content, colors);
+        if let Some(area) = layout.input {
             draw_input(f, app, area);
         }
         return;
     }
 
     if matches!(app.current_tab, Tab::Container) {
-        draw_container_tab(f, app, chunks[1], colors);
-        draw_output(f, app, chunks[2]);
-        if let Some(area) = input_area {
+        draw_container_tab(f, app, layout.content, colors);
+        if let Some(area) = layout.input {
             draw_input(f, app, area);
         }
         return;
@@ -247,8 +232,9 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
                 "Dockpilot TUI",
                 "",
                 "Controls:",
-                "  Tab / Shift+Tab - Switch tab",
-                "  Up/Down         - Navigate actions",
+                "  Tab / Shift+Tab - Change focus",
+                "  Left / Right    - Change resource tab",
+                "  Up/Down / j/k   - Navigate focused component",
                 "  Enter           - Execute / prompt for parameter",
                 "  x               - Cancel active task",
                 "  c               - Clear general output",
@@ -262,8 +248,9 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
                 "  /               - Filter log lines",
                 "  Empty filter + Enter - Clear filter",
                 "  e               - Start Docker event stream",
+                "  ?               - Open contextual help",
                 "  u               - Show disk usage",
-                "  k               - Preview cleanup",
+                "  K               - Preview cleanup",
                 "  q / Esc         - Exit",
                 "",
                 "Input mode:",
@@ -277,9 +264,9 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
             ];
             let items: Vec<ListItem> = help.iter().map(|l| ListItem::new(*l)).collect();
             let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Help"));
-            f.render_widget(list, chunks[1]);
-            draw_output(f, app, chunks[2]);
-            if let Some(area) = input_area {
+            f.render_widget(list, layout.content);
+            draw_output(f, app, layout.output);
+            if let Some(area) = layout.input {
                 draw_input(f, app, area);
             }
             return;
@@ -295,11 +282,11 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
         )
         .highlight_symbol(">> ");
 
-    f.render_stateful_widget(list, chunks[1], state);
+    f.render_stateful_widget(list, layout.content, state);
 
-    draw_output(f, app, chunks[2]);
+    draw_output(f, app, layout.output);
 
-    if let Some(area) = input_area {
+    if let Some(area) = layout.input {
         draw_input(f, app, area);
     }
 }
@@ -380,6 +367,23 @@ fn draw_image_tab(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
     )
     .highlight_symbol(">> ");
     f.render_stateful_widget(table, panes[0], &mut app.image_table_state);
+    if app.image_table_focus {
+        draw_details(
+            f,
+            panes[1],
+            app.filtered_images()
+                .get(app.image_table_state.selected().unwrap_or(0))
+                .map(|image| {
+                    format!(
+                        "ID: {}\nTag: {}\nSize: {} bytes",
+                        image.id, image.tag, image.size
+                    )
+                })
+                .unwrap_or_else(|| "No images available\nPress i to refresh".to_string()),
+            "Image Details",
+        );
+        return;
+    }
 
     let items = app.image_actions.iter().map(|action| {
         let label = match action {
@@ -455,6 +459,23 @@ fn draw_network_tab(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
     )
     .highlight_symbol(">> ");
     f.render_stateful_widget(table, panes[0], &mut app.network_table_state);
+    if app.network_table_focus {
+        draw_details(
+            f,
+            panes[1],
+            app.filtered_networks()
+                .get(app.network_table_state.selected().unwrap_or(0))
+                .map(|network| {
+                    format!(
+                        "Name: {}\nDriver: {}\nScope: {}",
+                        network.name, network.driver, network.scope
+                    )
+                })
+                .unwrap_or_else(|| "No networks available\nPress n to refresh".to_string()),
+            "Network Details",
+        );
+        return;
+    }
     let items = app.network_actions.iter().map(|action| {
         ListItem::new(match action {
             NetworkAction::List => "Refresh Networks",
@@ -516,6 +537,23 @@ fn draw_volume_tab(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
     )
     .highlight_symbol(">> ");
     f.render_stateful_widget(table, panes[0], &mut app.volume_table_state);
+    if app.volume_table_focus {
+        draw_details(
+            f,
+            panes[1],
+            app.filtered_volumes()
+                .get(app.volume_table_state.selected().unwrap_or(0))
+                .map(|volume| {
+                    format!(
+                        "Name: {}\nDriver: {}\nMountpoint: {}",
+                        volume.name, volume.driver, volume.mountpoint
+                    )
+                })
+                .unwrap_or_else(|| "No volumes available\nPress v to refresh".to_string()),
+            "Volume Details",
+        );
+        return;
+    }
     let items = app.volume_actions.iter().map(|action| {
         ListItem::new(match action {
             VolumeAction::List => "Refresh Volumes",
@@ -583,6 +621,23 @@ fn draw_container_tab(f: &mut Frame, app: &mut App, area: Rect, colors: Palette)
     )
     .highlight_symbol(">> ");
     f.render_stateful_widget(table, panes[0], &mut app.container_table_state);
+    if app.container_table_focus {
+        draw_details(
+            f,
+            panes[1],
+            app.filtered_containers()
+                .get(app.container_table_state.selected().unwrap_or(0))
+                .map(|container| {
+                    format!(
+                        "Name: {}\nImage: {}\nState: {}\nStatus: {}",
+                        container.name, container.image, container.state, container.status
+                    )
+                })
+                .unwrap_or_else(|| "No containers available\nPress r to refresh".to_string()),
+            "Container Details",
+        );
+        return;
+    }
 
     let items = app.container_actions.iter().map(|action| {
         let label = match action {
@@ -656,6 +711,13 @@ fn draw_output(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(output_list, area);
 }
 
+fn draw_details(f: &mut Frame, area: Rect, text: String, title: &str) {
+    f.render_widget(
+        Paragraph::new(text).block(Block::default().borders(Borders::ALL).title(title)),
+        area,
+    );
+}
+
 fn draw_input(f: &mut Frame, app: &App, area: Rect) {
     let text = format!("{} {}", app.input_prompt, app.input_buffer);
     let input_widget = Paragraph::new(text).block(
@@ -665,4 +727,26 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
             .border_style(Style::default().fg(Color::Yellow)),
     );
     f.render_widget(input_widget, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::draw_app;
+    use crate::app::App;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn renders_without_panic_on_small_terminal() {
+        let backend = TestBackend::new(60, 20);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        let mut app = App::new();
+
+        terminal
+            .draw(|frame| draw_app(frame, &mut app))
+            .expect("render small terminal");
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer.area().width <= 60);
+        assert!(buffer.area().height <= 20);
+    }
 }
