@@ -36,7 +36,12 @@ Completed:
   - Screen rendering lives in `src/tui/screens/` and shared rendering patterns live in `src/tui/widgets/`.
   - Resource focus is represented by one explicit, ordered `FocusTarget` instead of per-table toggles.
   - Resource details follow the selected filtered row, including empty-resource states.
-  - Rendering is covered at 120x40, 80x24, 60x20, 40x12, and 20x8 terminal sizes.
+   - Rendering is covered at 120x40, 80x24, 60x20, 40x12, and 20x8 terminal sizes.
+- UX-002 advanced TUI interaction:
+  - `:` command palette with typed commands, availability reasons, and safe dispatch.
+  - `/` incremental resource search with case-insensitive filtering and ID-preserved selection.
+  - `a` context actions for selected Docker resources, using existing safety confirmation.
+  - bounded, expiring success/info/warning/error notifications.
 
 The current TUI provides dashboard, container, image, network, volume, project, and help tabs. Legacy Docker Machine support was removed; use Docker contexts for local, TCP, or SSH engines.
 
@@ -138,10 +143,12 @@ Theme changes are cycled with the configured theme shortcut and saved to `dockpi
 | `Home` / `End` | Jump to output start/end |
 | `r` | Refresh the container table |
 | `f` | Filter/search containers |
+| `/` | Incrementally filter the current resource table |
+| `:` | Open the command palette |
+| `a` | Open actions for the selected resource |
 | `m` | Toggle container table/actions focus |
 | `s` | Cycle container sort field |
 | `p` | Pause/resume log display |
-| `/` | Filter log lines |
 | `d` | Refresh dashboard data |
 | `i` | Refresh image listing |
 | `t` | Cycle theme |
@@ -151,11 +158,14 @@ Theme changes are cycled with the configured theme shortcut and saved to `dockpi
 | `u` | Show Docker disk usage |
 | `K` | Preview cleanup without mutating resources |
 | `?` | Open contextual help |
+| `Backspace` | Dismiss the oldest notification |
 | `q` / `Esc` | Quit |
 | `Ctrl+C` | Quit |
 
 During a confirmation prompt, press `y` to continue or `n` / `Esc` to cancel.
-The `f` filter applies to the current resource table (containers, images, networks, or volumes). To clear it, open the filter prompt and press `Enter` with an empty value.
+The `f` filter opens the existing parameter prompt. `/` applies an incremental filter to the current resource table (containers, images, networks, or volumes); `Enter` keeps it and `Esc` restores the previous filter. When a log stream is visible, `/` retains its existing log-line filtering behavior. `:` searches commands incrementally and `a` opens state-aware actions for the selected resource. To clear a resource filter, delete its search text and press `Enter`.
+
+Notifications are transient by default. Critical errors and pending safety confirmations remain visible until dismissed with `Backspace`; detailed task output remains in the bounded output history.
 
 When the container table has focus, `Enter` inspects the selected container. Lifecycle mutations use Bollard and still pass through safe-mode confirmation and read-only policy checks.
 
