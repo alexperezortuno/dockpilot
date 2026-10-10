@@ -32,6 +32,11 @@ Completed:
 - DS-019 read-only disk usage reporting and cleanup previews
 - DS-020 guarded volume backup/restore with consistency warnings
 - DS-021 noninteractive JSON query CLI
+- UX-001 responsive TUI completion:
+  - Screen rendering lives in `src/tui/screens/` and shared rendering patterns live in `src/tui/widgets/`.
+  - Resource focus is represented by one explicit, ordered `FocusTarget` instead of per-table toggles.
+  - Resource details follow the selected filtered row, including empty-resource states.
+  - Rendering is covered at 120x40, 80x24, 60x20, 40x12, and 20x8 terminal sizes.
 
 The current TUI provides dashboard, container, image, network, volume, project, and help tabs. Legacy Docker Machine support was removed; use Docker contexts for local, TCP, or SSH engines.
 
@@ -58,9 +63,9 @@ cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-Current validation includes 34 unit tests covering application navigation, UX layout/focus rendering, JSON query dispatch, guarded volume backup dispatch, disk usage policy, bounded output/events/alerts, network/volume listing dispatch, theme and shortcut configuration, context endpoint parsing, image listing dispatch, Compose profile dispatch, dashboard requests, container filtering and inspection, bounded logs, configuration precedence, terminal restoration, safe command arguments, task cancellation, lifecycle policy, and engine status.
+Current validation includes 38 unit tests covering application navigation, UX layout/focus rendering, JSON query dispatch, guarded volume backup dispatch, disk usage policy, bounded output/events/alerts, network/volume listing dispatch, theme and shortcut configuration, context endpoint parsing, image listing dispatch, Compose profile dispatch, dashboard requests, container filtering and inspection, bounded logs, configuration precedence, terminal restoration, safe command arguments, task cancellation, lifecycle policy, and engine status.
 
-UX-001 uses `Tab`/`Shift+Tab` for pane focus and `Left`/`Right` for resource tabs. The current focus is shown in the footer and selected resource details appear beside focused tables.
+UX-001 uses `Tab`/`Shift+Tab` for ordered pane focus and `Left`/`Right` for resource tabs. The `m` shortcut remains available for focus changes. The current focus is shown in the footer and selected resource details appear beside focused tables.
 
 ## CI and Integration
 

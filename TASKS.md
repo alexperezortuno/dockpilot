@@ -34,6 +34,10 @@
 
 ## UX
 - [x] UX-001: Responsive layout, explicit focus, contextual details, and adaptive TUI states.
+  - Renderizado extraído a `src/tui/screens/`.
+  - Widgets reutilizables para tablas, acciones, detalles, navegación y estados vacíos.
+  - Foco único y ordenado mediante `FocusTarget`, conservando `m`, `Tab`, `Shift+Tab` y la navegación de pestañas.
+  - Pruebas de renderizado para 120x40, 80x24, 60x20, 40x12 y 20x8, incluyendo actualización de detalles por selección.
 
 ## First agent assignment
 Implement DS-001 only. Inspect the repository, run baseline checks where available, and report shell interpolation, blocking subprocess calls, hardcoded parameters, broken output scrolling and Compose working-directory behavior. Do not refactor before reporting findings.
