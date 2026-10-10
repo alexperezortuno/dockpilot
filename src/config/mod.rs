@@ -42,7 +42,7 @@ impl Default for Shortcuts {
 }
 
 #[derive(Debug, Parser, Default)]
-#[command(name = "dockpilot", about = "Docker management TUI")]
+#[command(name = "dockpilot", version, about = "Docker management TUI")]
 pub struct Cli {
     /// Optional TOML configuration file. Without this flag, config.toml is used if present.
     #[arg(long, value_name = "PATH")]
