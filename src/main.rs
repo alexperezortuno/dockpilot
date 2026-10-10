@@ -163,6 +163,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut last_network_refresh = Instant::now();
     let mut last_volume_refresh = Instant::now();
     let mut task_origins = HashMap::new();
+    let mut background_cursor = 0usize;
+    let mut last_draw = Instant::now() - Duration::from_millis(250);
 
     while !should_quit {
         app.tick();
@@ -173,7 +175,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     description,
                     origin,
                 } => {
-                    task_origins.insert(id, origin);
+                    task_origins.insert(id, (origin, description.clone()));
                     app.queue_task(id, description);
                     app.start_task(id);
                     app.set_task_status("running");
@@ -182,7 +184,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     app.set_task_status(format!("task {}: {}", id, message));
                 }
                 TaskEvent::Finished { id, lines } => {
-                    let origin = task_origins.remove(&id).unwrap_or(TaskOrigin::User);
+                    let (origin, _) = task_origins
+                        .remove(&id)
+                        .unwrap_or((TaskOrigin::User, String::new()));
                     app.finish_task(id, TaskState::Completed);
                     app.set_task_status("idle");
                     if origin == TaskOrigin::User {
@@ -196,14 +200,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     task_manager.complete(id);
                 }
                 TaskEvent::Failed { id, message } => {
-                    let origin = task_origins.remove(&id).unwrap_or(TaskOrigin::User);
+                    let (origin, description) = task_origins
+                        .remove(&id)
+                        .unwrap_or((TaskOrigin::User, String::new()));
                     app.finish_task(id, TaskState::Failed);
                     app.set_task_status("idle");
                     if origin == TaskOrigin::Background {
-                        if app.refresh_failed("background-refresh") {
+                        if app.refresh_failed(&description) {
                             app.notify(
                                 NotificationKind::Error,
-                                format!("Background refresh failed: {}", message),
+                                format!("{} failed: {}", description, message),
                                 true,
                             );
                         }
@@ -226,16 +232,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         format!("Task {} cancelled", id),
                         false,
                     );
+                    app.mark_dirty();
                 }
                 TaskEvent::Containers { id, containers } => {
-                    let origin = task_origins.remove(&id).unwrap_or(TaskOrigin::User);
+                    let (origin, description) = task_origins
+                        .remove(&id)
+                        .unwrap_or((TaskOrigin::User, String::new()));
                     app.set_task_status("idle");
                     let count = containers.len();
                     app.set_containers(containers);
                     if origin == TaskOrigin::User {
                         app.push_output(format!("[docker] loaded {} containers", count));
                         app.notify(NotificationKind::Success, "Containers refreshed", false);
-                    } else if app.refresh_recovered("background-refresh") {
+                    } else if app.refresh_recovered(&description) {
                         app.notify(NotificationKind::Info, "Docker refresh recovered", false);
                     }
                     task_manager.complete(id);
@@ -248,12 +257,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     app.push_event(line, alert);
                 }
                 TaskEvent::Dashboard { id, data } => {
-                    let origin = task_origins.remove(&id).unwrap_or(TaskOrigin::User);
+                    let (origin, description) = task_origins
+                        .remove(&id)
+                        .unwrap_or((TaskOrigin::User, String::new()));
                     app.set_task_status("idle");
                     app.set_dashboard(data);
-                    if origin == TaskOrigin::Background
-                        && app.refresh_recovered("background-refresh")
-                    {
+                    if origin == TaskOrigin::Background && app.refresh_recovered(&description) {
                         app.notify(NotificationKind::Info, "Docker refresh recovered", false);
                     }
                     task_manager.complete(id);
@@ -263,52 +272,62 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     container_id,
                     sample,
                 } => {
-                    let origin = task_origins.remove(&id).unwrap_or(TaskOrigin::User);
+                    let (origin, description) = task_origins
+                        .remove(&id)
+                        .unwrap_or((TaskOrigin::User, String::new()));
                     app.record_metrics(Instant::now(), sample);
                     if origin == TaskOrigin::Background {
                         app.set_task_status("metrics updated");
                     } else {
                         app.set_task_status(format!("metrics: {}", container_id));
                     }
+                    if origin == TaskOrigin::Background {
+                        app.refresh_recovered(&description);
+                    }
                     task_manager.complete(id);
                 }
                 TaskEvent::Health { id, snapshot } => {
-                    task_origins.remove(&id);
+                    let (_, description) = task_origins
+                        .remove(&id)
+                        .unwrap_or((TaskOrigin::Background, String::new()));
                     app.set_health(snapshot);
                     app.set_task_status("health updated");
+                    app.refresh_recovered(&description);
                     task_manager.complete(id);
                 }
                 TaskEvent::Images { id, images } => {
-                    let origin = task_origins.remove(&id).unwrap_or(TaskOrigin::User);
+                    let (origin, description) = task_origins
+                        .remove(&id)
+                        .unwrap_or((TaskOrigin::User, String::new()));
                     app.set_task_status("idle");
                     let count = images.len();
                     app.set_images(images);
                     if origin == TaskOrigin::User {
                         app.push_output(format!("[docker] loaded {} images", count));
                         app.notify(NotificationKind::Success, "Images refreshed", false);
-                    } else if app.refresh_recovered("background-refresh") {
+                    } else if app.refresh_recovered(&description) {
                         app.notify(NotificationKind::Info, "Docker refresh recovered", false);
                     }
                     task_manager.complete(id);
                 }
                 TaskEvent::Networks { id, networks } => {
-                    let origin = task_origins.remove(&id).unwrap_or(TaskOrigin::User);
+                    let (origin, description) = task_origins
+                        .remove(&id)
+                        .unwrap_or((TaskOrigin::User, String::new()));
                     app.set_task_status("idle");
                     app.set_networks(networks);
-                    if origin == TaskOrigin::Background
-                        && app.refresh_recovered("background-refresh")
-                    {
+                    if origin == TaskOrigin::Background && app.refresh_recovered(&description) {
                         app.notify(NotificationKind::Info, "Docker refresh recovered", false);
                     }
                     task_manager.complete(id);
                 }
                 TaskEvent::Volumes { id, volumes } => {
-                    let origin = task_origins.remove(&id).unwrap_or(TaskOrigin::User);
+                    let (origin, description) = task_origins
+                        .remove(&id)
+                        .unwrap_or((TaskOrigin::User, String::new()));
                     app.set_task_status("idle");
                     app.set_volumes(volumes);
-                    if origin == TaskOrigin::Background
-                        && app.refresh_recovered("background-refresh")
-                    {
+                    if origin == TaskOrigin::Background && app.refresh_recovered(&description) {
                         app.notify(NotificationKind::Info, "Docker refresh recovered", false);
                     }
                     task_manager.complete(id);
@@ -316,73 +335,77 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        if task_manager.has_client()
-            && task_manager.is_idle()
-            && app.auto_refresh
-            && last_container_refresh.elapsed()
-                >= Duration::from_millis(config.container_refresh_interval_ms)
-        {
-            task_manager.spawn_with_origin(TaskRequest::ListContainers, TaskOrigin::Background);
-            last_container_refresh = Instant::now();
-        } else if task_manager.has_client()
-            && task_manager.is_idle()
-            && app.auto_refresh
-            && last_image_refresh.elapsed()
-                >= Duration::from_millis(config.image_refresh_interval_ms)
-        {
-            task_manager.spawn_with_origin(TaskRequest::ListImages, TaskOrigin::Background);
-            last_image_refresh = Instant::now();
-        } else if task_manager.has_client()
-            && task_manager.is_idle()
-            && app.auto_refresh
-            && last_network_refresh.elapsed()
-                >= Duration::from_millis(config.network_refresh_interval_ms)
-        {
-            task_manager.spawn_with_origin(TaskRequest::ListNetworks, TaskOrigin::Background);
-            last_network_refresh = Instant::now();
-        } else if task_manager.has_client()
-            && task_manager.is_idle()
-            && app.auto_refresh
-            && last_volume_refresh.elapsed()
-                >= Duration::from_millis(config.volume_refresh_interval_ms)
-        {
-            task_manager.spawn_with_origin(TaskRequest::ListVolumes, TaskOrigin::Background);
-            last_volume_refresh = Instant::now();
-        } else if task_manager.has_client()
-            && task_manager.is_idle()
-            && app.auto_refresh
-            && last_metrics.elapsed() >= Duration::from_millis(config.metrics_interval_ms)
-            && let Some(container_id) = app.selected_container_id()
-        {
-            if metrics_container.as_ref() != Some(&container_id) {
-                app.reset_metrics();
-                metrics_container = Some(container_id.clone());
+        if task_manager.has_client() && task_manager.is_idle() && app.auto_refresh {
+            for offset in 0..6 {
+                let slot = (background_cursor + offset) % 6;
+                let now = Instant::now();
+                let request = match slot {
+                    0 if last_container_refresh.elapsed()
+                        >= Duration::from_millis(config.container_refresh_interval_ms) =>
+                    {
+                        last_container_refresh = now;
+                        Some(TaskRequest::ListContainers)
+                    }
+                    1 if last_image_refresh.elapsed()
+                        >= Duration::from_millis(config.image_refresh_interval_ms) =>
+                    {
+                        last_image_refresh = now;
+                        Some(TaskRequest::ListImages)
+                    }
+                    2 if last_network_refresh.elapsed()
+                        >= Duration::from_millis(config.network_refresh_interval_ms) =>
+                    {
+                        last_network_refresh = now;
+                        Some(TaskRequest::ListNetworks)
+                    }
+                    3 if last_volume_refresh.elapsed()
+                        >= Duration::from_millis(config.volume_refresh_interval_ms) =>
+                    {
+                        last_volume_refresh = now;
+                        Some(TaskRequest::ListVolumes)
+                    }
+                    4 if last_metrics.elapsed()
+                        >= Duration::from_millis(config.metrics_interval_ms) =>
+                    {
+                        app.selected_container_id().map(|container_id| {
+                            if metrics_container.as_ref() != Some(&container_id) {
+                                app.reset_metrics();
+                                metrics_container = Some(container_id.clone());
+                            }
+                            last_metrics = now;
+                            TaskRequest::Metrics { id: container_id }
+                        })
+                    }
+                    5 if last_health.elapsed()
+                        >= Duration::from_millis(config.metrics_interval_ms) =>
+                    {
+                        last_health = now;
+                        app.selected_container_id()
+                            .map(|id| TaskRequest::Health { id })
+                    }
+                    _ => None,
+                };
+                if let Some(request) = request {
+                    task_manager.spawn_with_origin(request, TaskOrigin::Background);
+                    background_cursor = (slot + 1) % 6;
+                    break;
+                }
             }
-            task_manager.spawn_with_origin(
-                TaskRequest::Metrics { id: container_id },
-                TaskOrigin::Background,
-            );
-            last_metrics = Instant::now();
-        } else if task_manager.has_client()
-            && task_manager.is_idle()
-            && app.auto_refresh
-            && last_health.elapsed() >= Duration::from_millis(config.metrics_interval_ms)
-            && let Some(container_id) = app.selected_container_id()
-        {
-            task_manager.spawn_with_origin(
-                TaskRequest::Health { id: container_id },
-                TaskOrigin::Background,
-            );
-            last_health = Instant::now();
         }
 
-        terminal.draw(|f| tui::draw_app(f, &mut app))?;
+        let timed_render =
+            app.task_status == "running" && last_draw.elapsed() >= Duration::from_millis(250);
+        if app.take_dirty() || timed_render {
+            terminal.draw(|f| tui::draw_app(f, &mut app))?;
+            last_draw = Instant::now();
+        }
 
         if event::poll(poll_interval)?
             && let Event::Key(KeyEvent {
                 code, modifiers, ..
             }) = event::read()?
         {
+            app.mark_dirty();
             if pending_confirmation.is_some() {
                 match code {
                     KeyCode::Char('y') | KeyCode::Char('Y') => {
@@ -434,11 +457,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 app.palette_query_backspace();
                                 None
                             }
-                            KeyCode::Up | KeyCode::Char('k') => {
+                            KeyCode::Up => {
                                 app.palette_move(-1);
                                 None
                             }
-                            KeyCode::Down | KeyCode::Char('j') => {
+                            KeyCode::Down => {
                                 app.palette_move(1);
                                 None
                             }
