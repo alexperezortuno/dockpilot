@@ -19,6 +19,15 @@ theme = "t"
 poll_interval_ms = 50
 output_capacity = 2000
 
+# Historical container metrics.
+metrics_interval_ms = 1000
+metrics_capacity = 120
+
+# Omit a threshold to disable that alert.
+alert_cpu_percent = 85.0
+alert_memory_percent = 90.0
+alert_cooldown_seconds = 30
+
 # Policy defaults consumed by later safety-policy work.
 safe_mode = true
 read_only = false
