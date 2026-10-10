@@ -50,6 +50,10 @@ Completed:
   - typed user/background/system task origins suppress successful periodic output and notifications.
   - configurable per-resource refresh intervals, `r` manual refresh, and `R` auto-refresh toggle.
   - Output (`o`), Details (`D`), and compact (`C`) layout toggles with persisted preferences.
+- UX-005 UI polish and stability:
+  - conditional rendering skips idle `terminal.draw` calls while preserving event and notification invalidation.
+  - background scheduling rotates across resource lists, metrics, and healthchecks without starting duplicate tasks.
+  - refresh incidents are independent per task context, command-palette `j`/`k` input is preserved, and task durations are measured from start to finish.
 
 The current TUI provides dashboard, container, image, network, volume, project, and help tabs. Legacy Docker Machine support was removed; use Docker contexts for local, TCP, or SSH engines.
 
@@ -76,7 +80,7 @@ cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-Current validation includes 38 unit tests covering application navigation, UX layout/focus rendering, JSON query dispatch, guarded volume backup dispatch, disk usage policy, bounded output/events/alerts, network/volume listing dispatch, theme and shortcut configuration, context endpoint parsing, image listing dispatch, Compose profile dispatch, dashboard requests, container filtering and inspection, bounded logs, configuration precedence, terminal restoration, safe command arguments, task cancellation, lifecycle policy, and engine status.
+Current validation includes 62 unit tests covering application navigation, UX layout/focus rendering, dirty rendering, JSON query dispatch, guarded volume backup dispatch, disk usage policy, bounded output/events/alerts, independent refresh incidents, network/volume listing dispatch, theme and shortcut configuration, context endpoint parsing, image listing dispatch, Compose profile dispatch, dashboard requests, container filtering and inspection, bounded logs, configuration precedence, terminal restoration, safe command arguments, task cancellation, lifecycle policy, task duration, palette text input, and engine status.
 
 UX-001 uses `Tab`/`Shift+Tab` for ordered pane focus and `Left`/`Right` for resource tabs. The `m` shortcut remains available for focus changes. The current focus is shown in the footer and selected resource details appear beside focused tables.
 
@@ -184,7 +188,7 @@ The `f` filter opens the existing parameter prompt. `/` applies an incremental f
 
 Notifications are transient by default. Critical errors and pending safety confirmations remain visible until dismissed with `Backspace`; detailed task output remains in the bounded output history.
 
-Background refreshes run independently per resource interval and never chain all Docker queries. Successful background refreshes update tables silently; failures are grouped until recovery. Disable them with `R`.
+Background refreshes run independently per resource interval and never chain all Docker queries. Successful background refreshes update tables silently; failures are grouped per resource/task until recovery. Metrics and healthchecks rotate fairly with list refreshes. Disable them with `R`.
 
 When the container table has focus, `Enter` inspects the selected container. Lifecycle mutations use Bollard and still pass through safe-mode confirmation and read-only policy checks.
 

@@ -262,6 +262,7 @@ pub struct App {
     pub(crate) mouse_enabled: bool,
     pub(crate) refresh_status: String,
     refresh_failures: HashMap<String, u32>,
+    dirty: bool,
 }
 
 impl App {
@@ -381,6 +382,7 @@ impl App {
             mouse_enabled: false,
             refresh_status: "auto-refresh on".to_string(),
             refresh_failures: HashMap::new(),
+            dirty: true,
         };
 
         app.container_list_state.select(Some(0));
@@ -395,6 +397,7 @@ impl App {
     pub fn push_output(&mut self, line: impl Into<String>) {
         output::push(&mut self.output_lines, self.output_capacity, line);
         self.output_scroll = self.output_lines.len();
+        self.mark_dirty();
     }
 
     pub fn append_output(&mut self, lines: impl IntoIterator<Item = String>) {
@@ -412,46 +415,55 @@ impl App {
     pub fn clear_output(&mut self) {
         self.output_lines.clear();
         self.output_scroll = 0;
+        self.mark_dirty();
     }
 
     pub fn scroll_output_up(&mut self, amount: usize) {
         self.output_scroll = self.output_scroll.saturating_sub(amount);
+        self.mark_dirty();
     }
 
     pub fn scroll_output_down(&mut self, amount: usize) {
         self.output_scroll = self.output_scroll.saturating_add(amount);
+        self.mark_dirty();
     }
 
     pub fn scroll_output_home(&mut self) {
         self.output_scroll = 0;
+        self.mark_dirty();
     }
 
     pub fn scroll_output_end(&mut self) {
         self.output_scroll = self.output_lines.len();
+        self.mark_dirty();
     }
 
     pub fn set_containers(&mut self, containers: Vec<ContainerRow>) {
         let selected = self.selected_resource_id(ResourceKind::Container);
         self.containers = containers;
         self.restore_selection(&selected, ResourceKind::Container);
+        self.mark_dirty();
     }
 
     pub fn set_images(&mut self, images: Vec<ImageRow>) {
         let selected = self.selected_resource_id(ResourceKind::Image);
         self.images = images;
         self.restore_selection(&selected, ResourceKind::Image);
+        self.mark_dirty();
     }
 
     pub fn set_networks(&mut self, networks: Vec<NetworkRow>) {
         let selected = self.selected_resource_id(ResourceKind::Network);
         self.networks = networks;
         self.restore_selection(&selected, ResourceKind::Network);
+        self.mark_dirty();
     }
 
     pub fn set_volumes(&mut self, volumes: Vec<VolumeRow>) {
         let selected = self.selected_resource_id(ResourceKind::Volume);
         self.volumes = volumes;
         self.restore_selection(&selected, ResourceKind::Volume);
+        self.mark_dirty();
     }
 
     fn selected_resource_id(&self, kind: ResourceKind) -> Option<String> {
@@ -541,22 +553,22 @@ impl App {
 
     #[cfg(test)]
     pub fn start_container_filter(&mut self) {
-        self.start_input("Filtro de contenedores:", PendingAction::ContainerFilter);
+        self.start_input("Container filter:", PendingAction::ContainerFilter);
     }
 
     pub fn start_filter(&mut self) {
         match self.current_tab {
             Tab::Container => {
-                self.start_input("Filtro de contenedores:", PendingAction::ContainerFilter);
+                self.start_input("Container filter:", PendingAction::ContainerFilter);
             }
             Tab::Image => {
-                self.start_input("Filtro de imagenes:", PendingAction::ImageFilter);
+                self.start_input("Image filter:", PendingAction::ImageFilter);
             }
             Tab::Network => {
-                self.start_input("Filtro de redes:", PendingAction::NetworkFilter);
+                self.start_input("Network filter:", PendingAction::NetworkFilter);
             }
             Tab::Volume => {
-                self.start_input("Filtro de volumenes:", PendingAction::VolumeFilter);
+                self.start_input("Volume filter:", PendingAction::VolumeFilter);
             }
             _ => {}
         }
@@ -638,8 +650,9 @@ impl App {
     }
 
     pub fn start_context_menu(&mut self) {
-        if self.focus_target == FocusTarget::Table && !self.context_actions().is_empty() {
+        if !self.context_actions().is_empty() {
             self.overlay = Overlay::Context { selected: 0 };
+            self.mark_dirty();
         }
     }
 
@@ -823,10 +836,12 @@ impl App {
 
     pub fn set_engine_status(&mut self, status: impl Into<String>) {
         self.engine_status = status.into();
+        self.mark_dirty();
     }
 
     pub fn set_task_status(&mut self, status: impl Into<String>) {
         self.task_status = status.into();
+        self.mark_dirty();
     }
 
     pub fn set_policy(&mut self, policy: SafetyPolicy) {
@@ -885,7 +900,17 @@ impl App {
     }
 
     pub fn tick(&mut self) {
-        self.notifications.tick();
+        if self.notifications.tick() {
+            self.mark_dirty();
+        }
+    }
+
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
+    pub fn take_dirty(&mut self) -> bool {
+        std::mem::replace(&mut self.dirty, false)
     }
 
     pub fn notify(
@@ -943,7 +968,7 @@ impl App {
                 entry
                     .reason
                     .clone()
-                    .unwrap_or_else(|| "acción no disponible".to_string()),
+                    .unwrap_or_else(|| "action unavailable".to_string()),
                 false,
             );
             return None;
@@ -1003,6 +1028,7 @@ impl App {
 
     pub fn set_dashboard(&mut self, dashboard: DashboardData) {
         self.dashboard = Some(dashboard);
+        self.mark_dirty();
     }
 
     pub fn selected_container_id(&self) -> Option<String> {
@@ -1037,6 +1063,7 @@ impl App {
             self.log_lines.pop_front();
         }
         self.log_lines.push_back(line);
+        self.mark_dirty();
     }
 
     pub fn toggle_logs_paused(&mut self) {
@@ -1054,10 +1081,11 @@ impl App {
                 self.alerts.pop_front();
             }
         }
+        self.mark_dirty();
     }
 
     pub fn start_log_filter(&mut self) {
-        self.start_input("Filtro de logs:", PendingAction::LogFilter);
+        self.start_input("Log filter:", PendingAction::LogFilter);
     }
 
     pub fn cycle_log_level(&mut self) {
@@ -1101,6 +1129,7 @@ impl App {
 
     pub fn record_metrics(&mut self, at: std::time::Instant, sample: monitoring::RawSample) {
         self.latest_metrics = Some(self.metrics_history.push(at, sample));
+        self.mark_dirty();
     }
 
     pub fn reset_metrics(&mut self) {
@@ -1110,6 +1139,7 @@ impl App {
 
     pub fn set_health(&mut self, health: HealthSnapshot) {
         self.health = Some(health);
+        self.mark_dirty();
     }
 
     // --- Generic navigation ---
@@ -1292,7 +1322,7 @@ impl App {
                 )
             )
         {
-            self.push_output("[entrada cancelada: valor vacío]");
+            self.push_output("[input cancelled: empty value]");
             return None;
         }
 
@@ -1416,7 +1446,7 @@ impl App {
                 self.execute_command(CommandSpec::new("docker").args(["history"]).arg(value))
             }
             PendingAction::ImageBuild => {
-                // value = "tag context"  p.ej. "myimage ."
+                // value = "tag context" e.g. "myimage ."
                 let mut parts = value.splitn(2, ' ');
                 let tag = parts.next().unwrap_or("myimage");
                 let ctx = parts.next().unwrap_or(".");
@@ -1462,7 +1492,7 @@ impl App {
             PendingAction::ProjectSetFolder => {
                 self.project_folder = value.to_string();
                 let folder = self.project_folder.clone();
-                self.push_output(format!("[proyecto] carpeta establecida: {}", folder));
+                self.push_output(format!("[project] folder set: {}", folder));
                 self.execute_command(CommandSpec::new("ls").args(["-la"]).arg(folder))
             }
             PendingAction::ComposeProfileUp => {
@@ -1576,75 +1606,73 @@ impl App {
         match action {
             ContainerAction::StartAll => Some(TaskRequest::StartAll),
             ContainerAction::Start => {
-                self.start_input("Contenedor a iniciar:", PendingAction::ContainerStart)
+                self.start_input("Container to start:", PendingAction::ContainerStart)
             }
             ContainerAction::StopAll => Some(TaskRequest::StopAll),
             ContainerAction::Stop => {
-                self.start_input("Contenedor a detener:", PendingAction::ContainerStop)
+                self.start_input("Container to stop:", PendingAction::ContainerStop)
             }
             ContainerAction::Restart => {
-                self.start_input("Contenedor a reiniciar:", PendingAction::ContainerRestart)
+                self.start_input("Container to restart:", PendingAction::ContainerRestart)
             }
             ContainerAction::ListAll => {
                 self.execute_command(CommandSpec::new("docker").args(["ps", "-a"]))
             }
             ContainerAction::List => self.execute_command(CommandSpec::new("docker").args(["ps"])),
             ContainerAction::Logs => {
-                self.start_input("Contenedor para ver logs:", PendingAction::ContainerLogs)
+                self.start_input("Container to view logs:", PendingAction::ContainerLogs)
             }
             ContainerAction::Create => self.start_input(
-                "Nombre e imagen (ej: test nginx):",
+                "Name and image (e.g. test nginx):",
                 PendingAction::ContainerCreate,
             ),
             ContainerAction::Remove => self.start_input(
-                "Contenedor a eliminar (ID o nombre):",
+                "Container to remove (ID or name):",
                 PendingAction::ContainerRemove,
             ),
             ContainerAction::Top => {
-                self.start_input("Contenedor para top:", PendingAction::ContainerTop)
+                self.start_input("Container for top:", PendingAction::ContainerTop)
             }
             ContainerAction::Diff => {
-                self.start_input("Contenedor para diff:", PendingAction::ContainerDiff)
+                self.start_input("Container for diff:", PendingAction::ContainerDiff)
             }
             ContainerAction::Pause => {
-                self.start_input("Contenedor a pausar:", PendingAction::ContainerPause)
+                self.start_input("Container to pause:", PendingAction::ContainerPause)
             }
             ContainerAction::Unpause => {
-                self.start_input("Contenedor a reanudar:", PendingAction::ContainerUnpause)
+                self.start_input("Container to unpause:", PendingAction::ContainerUnpause)
             }
             ContainerAction::Update => {
-                self.start_input("Contenedor a actualizar:", PendingAction::ContainerUpdate)
+                self.start_input("Container to update:", PendingAction::ContainerUpdate)
             }
             ContainerAction::Wait => {
-                self.start_input("Contenedor a esperar:", PendingAction::ContainerWait)
+                self.start_input("Container to wait for:", PendingAction::ContainerWait)
             }
         }
     }
 
     fn run_image_action(&mut self, action: &ImageAction) -> Option<TaskRequest> {
         match action {
-            ImageAction::Build => {
-                self.start_input("Tag y contexto (ej: myimage .):", PendingAction::ImageBuild)
-            }
+            ImageAction::Build => self.start_input(
+                "Tag and context (e.g. myimage .):",
+                PendingAction::ImageBuild,
+            ),
             ImageAction::Rebuild => self.start_input(
-                "Tag y contexto (ej: myimage .):",
+                "Tag and context (e.g. myimage .):",
                 PendingAction::ImageRebuild,
             ),
             ImageAction::List => Some(TaskRequest::ListImages),
-            ImageAction::Remove => self.start_input(
-                "Imagen a eliminar (ID o nombre):",
-                PendingAction::ImageRemove,
-            ),
-            ImageAction::Push => {
-                self.start_input("Imagen a subir (tag):", PendingAction::ImagePush)
+            ImageAction::Remove => {
+                self.start_input("Image to remove (ID or name):", PendingAction::ImageRemove)
             }
-            ImageAction::Pull => self.start_input("Imagen a descargar:", PendingAction::ImagePull),
-            ImageAction::Save => self.start_input("Imagen a guardar:", PendingAction::ImageSave),
+            ImageAction::Push => self.start_input("Image to push (tag):", PendingAction::ImagePush),
+            ImageAction::Pull => self.start_input("Image to pull:", PendingAction::ImagePull),
+            ImageAction::Save => self.start_input("Image to save:", PendingAction::ImageSave),
             ImageAction::Load => {
-                self.start_input("Ruta del tar (ej: image.tar):", PendingAction::ImageLoad)
+                self.start_input("Tar path (e.g. image.tar):", PendingAction::ImageLoad)
             }
             ImageAction::History => {
-                self.start_input("Imagen a inspeccionar:", PendingAction::ImageHistory)
+                self.start_input("Image to inspect:", PendingAction::ImageHistory)
             }
         }
     }
@@ -1653,10 +1681,10 @@ impl App {
         match action {
             NetworkAction::List => Some(TaskRequest::ListNetworks),
             NetworkAction::Create => {
-                self.start_input("Nombre de la nueva red:", PendingAction::NetworkCreate)
+                self.start_input("New network name:", PendingAction::NetworkCreate)
             }
             NetworkAction::Remove => {
-                self.start_input("Nombre de la red a eliminar:", PendingAction::NetworkRemove)
+                self.start_input("Network name to remove:", PendingAction::NetworkRemove)
             }
         }
     }
@@ -1665,18 +1693,17 @@ impl App {
         match action {
             VolumeAction::List => Some(TaskRequest::ListVolumes),
             VolumeAction::Create => {
-                self.start_input("Nombre del nuevo volumen:", PendingAction::VolumeCreate)
+                self.start_input("New volume name:", PendingAction::VolumeCreate)
             }
-            VolumeAction::Remove => self.start_input(
-                "Nombre del volumen a eliminar:",
-                PendingAction::VolumeRemove,
-            ),
+            VolumeAction::Remove => {
+                self.start_input("Volume name to remove:", PendingAction::VolumeRemove)
+            }
             VolumeAction::Backup => self.start_input(
-                "Volumen y archivo (volumen|ruta.tar.gz):",
+                "Volume and file (volume|path.tar.gz):",
                 PendingAction::VolumeBackup,
             ),
             VolumeAction::Restore => self.start_input(
-                "Volumen y archivo (volumen|ruta.tar.gz):",
+                "Volume and file (volume|path.tar.gz):",
                 PendingAction::VolumeRestore,
             ),
         }
@@ -1684,13 +1711,12 @@ impl App {
 
     fn run_project_action(&mut self, action: &ProjectAction) -> Option<TaskRequest> {
         match action {
-            ProjectAction::SetFolder => self.start_input(
-                "Ruta de la carpeta del proyecto:",
-                PendingAction::ProjectSetFolder,
-            ),
+            ProjectAction::SetFolder => {
+                self.start_input("Project folder path:", PendingAction::ProjectSetFolder)
+            }
             ProjectAction::ComposeUp => self.execute_compose(&["compose", "up", "-d"]),
             ProjectAction::ComposeUpProfile => {
-                self.start_input("Perfil Compose:", PendingAction::ComposeProfileUp)
+                self.start_input("Compose profile:", PendingAction::ComposeProfileUp)
             }
             ProjectAction::ComposeDown => self.execute_compose_down(),
             ProjectAction::ComposeConfig => self.execute_compose_read_only(&["compose", "config"]),
@@ -1833,7 +1859,7 @@ mod tests {
         assert!(app.pending_action.is_none());
         assert_eq!(
             app.output_lines.back().map(String::as_str),
-            Some("[entrada cancelada: valor vacío]")
+            Some("[input cancelled: empty value]")
         );
     }
 
@@ -1944,8 +1970,12 @@ mod tests {
         let mut app = App::new();
         assert!(app.refresh_failed("containers"));
         assert!(!app.refresh_failed("containers"));
+        assert!(app.refresh_failed("images"));
+        assert!(!app.refresh_failed("images"));
         assert!(app.refresh_recovered("containers"));
         assert!(!app.refresh_recovered("containers"));
+        assert!(app.refresh_recovered("images"));
+        assert!(!app.refresh_recovered("images"));
     }
 
     #[test]
@@ -1961,6 +1991,31 @@ mod tests {
         assert!(!app.show_details);
         assert!(app.compact_layout);
         assert!(!app.auto_refresh);
+    }
+
+    #[test]
+    fn dirty_state_is_consumed_and_changes_invalidate_rendering() {
+        let mut app = App::new();
+        assert!(app.take_dirty());
+        assert!(!app.take_dirty());
+
+        app.toggle_output();
+        app.mark_dirty();
+        assert!(app.take_dirty());
+        assert!(!app.take_dirty());
+    }
+
+    #[test]
+    fn palette_query_keeps_j_and_k_as_text() {
+        let mut app = App::new();
+        app.start_palette();
+        app.palette_query_push('j');
+        app.palette_query_push('k');
+
+        assert!(matches!(
+            app.overlay,
+            Overlay::Palette { ref query, .. } if query == "jk"
+        ));
     }
 
     #[test]
@@ -2272,5 +2327,22 @@ mod tests {
         assert!(!app.context_actions().contains(&ContextAction::Start));
         let request = app.context_request(ContextAction::Remove).unwrap();
         assert_eq!(request.mutation(), Mutation::Destructive);
+    }
+
+    #[test]
+    fn context_menu_opens_with_actions_focus_for_the_selected_resource() {
+        let mut app = App::new();
+        app.set_containers(vec![ContainerRow {
+            id: "container".into(),
+            name: "api".into(),
+            image: "demo".into(),
+            state: "running".into(),
+            status: "Up".into(),
+        }]);
+        app.focus_target = FocusTarget::Actions;
+
+        app.start_context_menu();
+
+        assert!(matches!(app.overlay, Overlay::Context { selected: 0 }));
     }
 }
