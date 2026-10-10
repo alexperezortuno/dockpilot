@@ -89,6 +89,12 @@ pub enum Tab {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FocusTarget {
+    Table,
+    Actions,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContainerSort {
     Name,
     Image,
@@ -140,6 +146,7 @@ pub enum PendingAction {
 
 pub struct App {
     pub(crate) current_tab: Tab,
+    pub(crate) focus_target: FocusTarget,
     pub(crate) container_actions: Vec<ContainerAction>,
     pub(crate) image_actions: Vec<ImageAction>,
     pub(crate) images: Vec<ImageRow>,
@@ -167,6 +174,7 @@ pub struct App {
     pub(crate) output_scroll: usize,
     pub(crate) project_folder: String,
     pub(crate) engine_status: String,
+    pub(crate) task_status: String,
     pub(crate) theme: ThemeName,
     pub(crate) dashboard: Option<DashboardData>,
     pub(crate) log_lines: VecDeque<String>,
@@ -197,6 +205,7 @@ impl App {
         let project_folder = project_folder.to_string_lossy().to_string();
         let mut app = App {
             current_tab: Tab::Container,
+            focus_target: FocusTarget::Table,
             container_actions: vec![
                 ContainerAction::StartAll,
                 ContainerAction::Start,
@@ -267,6 +276,7 @@ impl App {
             output_scroll: 0,
             project_folder,
             engine_status: "checking Docker Engine".to_string(),
+            task_status: "idle".to_string(),
             theme: ThemeName::Dark,
             dashboard: None,
             log_lines: VecDeque::new(),
@@ -378,6 +388,28 @@ impl App {
             Tab::Volume => self.volume_table_focus = !self.volume_table_focus,
             _ => {}
         }
+        self.sync_focus_target();
+    }
+
+    fn sync_focus_target(&mut self) {
+        self.focus_target = if matches!(self.current_tab, Tab::Container)
+            && self.container_table_focus
+            || matches!(self.current_tab, Tab::Image) && self.image_table_focus
+            || matches!(self.current_tab, Tab::Network) && self.network_table_focus
+            || matches!(self.current_tab, Tab::Volume) && self.volume_table_focus
+        {
+            FocusTarget::Table
+        } else {
+            FocusTarget::Actions
+        };
+    }
+
+    pub fn focus_next(&mut self) {
+        self.toggle_focus();
+    }
+
+    pub fn focus_previous(&mut self) {
+        self.toggle_focus();
     }
 
     pub fn toggle_container_focus(&mut self) {
@@ -487,6 +519,17 @@ impl App {
 
     pub fn set_engine_status(&mut self, status: impl Into<String>) {
         self.engine_status = status.into();
+    }
+
+    pub fn set_task_status(&mut self, status: impl Into<String>) {
+        self.task_status = status.into();
+    }
+
+    pub fn focus_label(&self) -> &'static str {
+        match self.focus_target {
+            FocusTarget::Table => "table",
+            FocusTarget::Actions => "actions",
+        }
     }
 
     pub fn set_theme(&mut self, theme: ThemeName) {
@@ -679,6 +722,7 @@ impl App {
             Tab::Project => Tab::Help,
             Tab::Help => Tab::Dashboard,
         };
+        self.sync_focus_target();
     }
 
     pub fn previous_tab(&mut self) {
@@ -691,6 +735,16 @@ impl App {
             Tab::Project => Tab::Volume,
             Tab::Help => Tab::Project,
         };
+        self.sync_focus_target();
+    }
+
+    pub fn show_help(&mut self) {
+        self.current_tab = Tab::Help;
+        self.sync_focus_target();
+    }
+
+    pub fn is_help(&self) -> bool {
+        matches!(self.current_tab, Tab::Help)
     }
 
     // --- Input mode ---
@@ -1568,5 +1622,15 @@ mod tests {
         assert_eq!(app.filtered_images().len(), 1);
         assert_eq!(app.filtered_networks().len(), 1);
         assert_eq!(app.filtered_volumes().len(), 1);
+    }
+
+    #[test]
+    fn tab_navigation_cycles_resource_tabs() {
+        let mut app = App::new();
+
+        app.next_tab();
+        assert_eq!(app.current_tab, Tab::Image);
+        app.previous_tab();
+        assert_eq!(app.current_tab, Tab::Container);
     }
 }
