@@ -40,6 +40,9 @@ pub fn draw_actions(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
             "  PageUp/PageDown - Scroll output",
             "  Home/End        - Output start/end",
             "  f               - Filter current table",
+            "  /               - Incremental resource search",
+            "  :               - Command palette",
+            "  a               - Selected resource actions",
             "  m               - Toggle table/actions focus",
             "  ?               - Open contextual help",
             "  q / Esc         - Exit",
@@ -49,6 +52,7 @@ pub fn draw_actions(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
             "  Esc      - Cancel",
             "  Backspace- Delete",
             "  y / n    - Confirm or cancel pending action",
+            "  Backspace- Dismiss notification",
         ];
         f.render_widget(
             List::new(help.into_iter().map(ListItem::new))

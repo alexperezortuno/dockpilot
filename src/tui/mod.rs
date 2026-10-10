@@ -41,7 +41,10 @@ pub(crate) fn palette(theme: ThemeName) -> Palette {
 }
 
 pub fn draw_app(f: &mut Frame, app: &mut App) {
-    let layout = areas(f.area(), app.input_mode);
+    let layout = areas(
+        f.area(),
+        app.input_mode || matches!(app.overlay, crate::app::Overlay::Search(_)),
+    );
     let colors = palette(app.theme);
     let tab_titles = [
         "Dashboard",
@@ -97,6 +100,14 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
         widgets::input::draw(f, app, area);
     }
     widgets::output::draw(f, app, layout.output);
+    if matches!(app.overlay, crate::app::Overlay::Search(_))
+        && let Some(area) = layout.input
+    {
+        widgets::search_bar::draw(f, app, area);
+    }
+    widgets::command_palette::draw(f, app, f.area(), colors);
+    widgets::context_menu::draw(f, app, f.area(), colors);
+    widgets::toast::draw(f, app, f.area(), colors);
 }
 
 #[cfg(test)]
@@ -207,5 +218,33 @@ mod tests {
         assert_eq!(app.focus_target, FocusTarget::Table);
         app.toggle_container_sort();
         assert_eq!(app.container_sort, ContainerSort::Image);
+    }
+
+    #[test]
+    fn renders_ux_overlays_at_requested_sizes() {
+        for (width, height) in [(120, 40), (80, 24), (60, 20)] {
+            let mut app = App::new();
+            app.current_tab = Tab::Container;
+            app.set_containers(vec![ContainerRow {
+                id: "container".into(),
+                name: "api".into(),
+                image: "demo".into(),
+                state: "running".into(),
+                status: "Up".into(),
+            }]);
+            app.start_palette();
+            let _ = render(width, height, &mut app);
+            app.overlay = crate::app::Overlay::Search(crate::app::search::SearchState::new(""));
+            let _ = render(width, height, &mut app);
+            app.overlay = crate::app::Overlay::Context { selected: 0 };
+            let _ = render(width, height, &mut app);
+            app.notify(
+                crate::app::notifications::NotificationKind::Info,
+                "ready",
+                false,
+            );
+            let output = render(width, height, &mut app);
+            assert!(output.contains("ready"));
+        }
     }
 }

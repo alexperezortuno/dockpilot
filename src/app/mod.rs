@@ -6,14 +6,17 @@ use crate::{
             ContainerLifecycle, ContainerRow, DashboardData, ImageRow, NetworkRow, VolumeRow,
         },
     },
-    security::Mutation,
+    security::{Mutation, SafetyPolicy},
     tasks::TaskRequest,
 };
 use ratatui::widgets::ListState;
 use std::{collections::VecDeque, path::PathBuf};
 
+pub mod commands;
 mod navigation;
+pub mod notifications;
 mod output;
+pub mod search;
 
 const MAX_LOG_LINES: usize = 2_000;
 const MAX_EVENT_LINES: usize = 500;
@@ -77,6 +80,25 @@ pub enum ProjectAction {
     ComposeConfig,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceKind {
+    Container,
+    Image,
+    Network,
+    Volume,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextAction {
+    Inspect,
+    Start,
+    Stop,
+    Restart,
+    Logs,
+    Remove,
+    History,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Tab {
     Dashboard,
@@ -92,6 +114,14 @@ pub enum Tab {
 pub enum FocusTarget {
     Table,
     Actions,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Overlay {
+    None,
+    Palette { query: String, selected: usize },
+    Search(search::SearchState),
+    Context { selected: usize },
 }
 
 impl FocusTarget {
@@ -202,6 +232,9 @@ pub struct App {
     pub(crate) input_buffer: String,
     pub(crate) input_prompt: String,
     pub(crate) pending_action: Option<PendingAction>,
+    pub(crate) overlay: Overlay,
+    pub(crate) notifications: notifications::NotificationQueue,
+    pub(crate) policy: SafetyPolicy,
 }
 
 impl App {
@@ -305,6 +338,9 @@ impl App {
             input_buffer: String::new(),
             input_prompt: String::new(),
             pending_action: None,
+            overlay: Overlay::None,
+            notifications: notifications::NotificationQueue::default(),
+            policy: SafetyPolicy::new(false, false),
         };
 
         app.container_list_state.select(Some(0));
@@ -355,41 +391,64 @@ impl App {
     }
 
     pub fn set_containers(&mut self, containers: Vec<ContainerRow>) {
+        let selected = self.selected_resource_id(ResourceKind::Container);
         self.containers = containers;
-        self.container_table_state
-            .select(if self.containers.is_empty() {
-                None
-            } else {
-                Some(0)
-            });
+        self.restore_selection(&selected, ResourceKind::Container);
     }
 
     pub fn set_images(&mut self, images: Vec<ImageRow>) {
+        let selected = self.selected_resource_id(ResourceKind::Image);
         self.images = images;
-        self.image_table_state.select(if self.images.is_empty() {
-            None
-        } else {
-            Some(0)
-        });
+        self.restore_selection(&selected, ResourceKind::Image);
     }
 
     pub fn set_networks(&mut self, networks: Vec<NetworkRow>) {
+        let selected = self.selected_resource_id(ResourceKind::Network);
         self.networks = networks;
-        self.network_table_state
-            .select(if self.networks.is_empty() {
-                None
-            } else {
-                Some(0)
-            });
+        self.restore_selection(&selected, ResourceKind::Network);
     }
 
     pub fn set_volumes(&mut self, volumes: Vec<VolumeRow>) {
+        let selected = self.selected_resource_id(ResourceKind::Volume);
         self.volumes = volumes;
-        self.volume_table_state.select(if self.volumes.is_empty() {
-            None
-        } else {
-            Some(0)
+        self.restore_selection(&selected, ResourceKind::Volume);
+    }
+
+    fn selected_resource_id(&self, kind: ResourceKind) -> Option<String> {
+        let index = match kind {
+            ResourceKind::Container => self.container_table_state.selected(),
+            ResourceKind::Image => self.image_table_state.selected(),
+            ResourceKind::Network => self.network_table_state.selected(),
+            ResourceKind::Volume => self.volume_table_state.selected(),
+        }?;
+        match kind {
+            ResourceKind::Container => self.filtered_containers().get(index).map(|r| r.id.clone()),
+            ResourceKind::Image => self.filtered_images().get(index).map(|r| r.id.clone()),
+            ResourceKind::Network => self.filtered_networks().get(index).map(|r| r.id.clone()),
+            ResourceKind::Volume => self.filtered_volumes().get(index).map(|r| r.name.clone()),
+        }
+    }
+
+    fn restore_selection(&mut self, selected: &Option<String>, kind: ResourceKind) {
+        let index = selected.as_ref().and_then(|id| match kind {
+            ResourceKind::Container => self.filtered_containers().iter().position(|r| &r.id == id),
+            ResourceKind::Image => self.filtered_images().iter().position(|r| &r.id == id),
+            ResourceKind::Network => self.filtered_networks().iter().position(|r| &r.id == id),
+            ResourceKind::Volume => self.filtered_volumes().iter().position(|r| &r.name == id),
         });
+        let has_rows = match kind {
+            ResourceKind::Container => !self.filtered_containers().is_empty(),
+            ResourceKind::Image => !self.filtered_images().is_empty(),
+            ResourceKind::Network => !self.filtered_networks().is_empty(),
+            ResourceKind::Volume => !self.filtered_volumes().is_empty(),
+        };
+        let index = index.or(has_rows.then_some(0));
+        match kind {
+            ResourceKind::Container => self.container_table_state.select(index),
+            ResourceKind::Image => self.image_table_state.select(index),
+            ResourceKind::Network => self.network_table_state.select(index),
+            ResourceKind::Volume => self.volume_table_state.select(index),
+        }
     }
 
     pub fn toggle_focus(&mut self) {
@@ -461,6 +520,191 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    pub fn start_search(&mut self) {
+        if let Some(filter) = self.current_filter() {
+            self.overlay = Overlay::Search(search::SearchState::new(filter));
+        }
+    }
+
+    pub fn search_push(&mut self, character: char) {
+        if let Overlay::Search(state) = &mut self.overlay {
+            state.query.push(character);
+            let query = state.query.clone();
+            self.set_current_filter(query);
+        }
+    }
+
+    pub fn search_backspace(&mut self) {
+        if let Overlay::Search(state) = &mut self.overlay {
+            state.query.pop();
+            let query = state.query.clone();
+            self.set_current_filter(query);
+        }
+    }
+
+    pub fn finish_search(&mut self) {
+        if matches!(self.overlay, Overlay::Search(_)) {
+            self.overlay = Overlay::None;
+        }
+    }
+
+    pub fn cancel_search(&mut self) {
+        if let Overlay::Search(state) = &self.overlay {
+            self.set_current_filter(state.previous_filter.clone());
+        }
+        self.overlay = Overlay::None;
+    }
+
+    fn current_filter(&self) -> Option<String> {
+        match self.current_tab {
+            Tab::Container => Some(self.container_filter.clone()),
+            Tab::Image => Some(self.image_filter.clone()),
+            Tab::Network => Some(self.network_filter.clone()),
+            Tab::Volume => Some(self.volume_filter.clone()),
+            _ => None,
+        }
+    }
+
+    fn set_current_filter(&mut self, filter: String) {
+        match self.current_tab {
+            Tab::Container => {
+                let selected = self.selected_resource_id(ResourceKind::Container);
+                self.container_filter = filter;
+                self.restore_selection(&selected, ResourceKind::Container);
+            }
+            Tab::Image => {
+                let selected = self.selected_resource_id(ResourceKind::Image);
+                self.image_filter = filter;
+                self.restore_selection(&selected, ResourceKind::Image);
+            }
+            Tab::Network => {
+                let selected = self.selected_resource_id(ResourceKind::Network);
+                self.network_filter = filter;
+                self.restore_selection(&selected, ResourceKind::Network);
+            }
+            Tab::Volume => {
+                let selected = self.selected_resource_id(ResourceKind::Volume);
+                self.volume_filter = filter;
+                self.restore_selection(&selected, ResourceKind::Volume);
+            }
+            _ => {}
+        }
+    }
+
+    pub fn start_palette(&mut self) {
+        commands::open_palette(self);
+    }
+
+    pub fn start_context_menu(&mut self) {
+        if self.focus_target == FocusTarget::Table && !self.context_actions().is_empty() {
+            self.overlay = Overlay::Context { selected: 0 };
+        }
+    }
+
+    pub fn context_actions(&self) -> Vec<ContextAction> {
+        match self.current_tab {
+            Tab::Container => {
+                let Some(index) = self.container_table_state.selected() else {
+                    return Vec::new();
+                };
+                let containers = self.filtered_containers();
+                let Some(container) = containers.get(index) else {
+                    return Vec::new();
+                };
+                let mut actions = vec![ContextAction::Inspect, ContextAction::Logs];
+                if container.state.eq_ignore_ascii_case("running") {
+                    actions.extend([ContextAction::Stop, ContextAction::Restart]);
+                } else {
+                    actions.push(ContextAction::Start);
+                }
+                actions.push(ContextAction::Remove);
+                actions
+            }
+            Tab::Image if self.selected_resource_id(ResourceKind::Image).is_some() => {
+                vec![ContextAction::History, ContextAction::Remove]
+            }
+            Tab::Network if self.selected_resource_id(ResourceKind::Network).is_some() => {
+                vec![ContextAction::Remove]
+            }
+            Tab::Volume if self.selected_resource_id(ResourceKind::Volume).is_some() => {
+                vec![ContextAction::Remove]
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    pub fn context_request(&mut self, action: ContextAction) -> Option<TaskRequest> {
+        let request = match (self.current_tab.clone(), action) {
+            (Tab::Container, ContextAction::Inspect) => self
+                .selected_container_id()
+                .map(|id| TaskRequest::InspectContainer { id }),
+            (Tab::Container, ContextAction::Logs) => self
+                .selected_container_id()
+                .map(|id| TaskRequest::ContainerLogs { id, follow: true }),
+            (Tab::Container, ContextAction::Start) => {
+                self.selected_container_id()
+                    .map(|id| TaskRequest::ContainerLifecycle {
+                        id,
+                        operation: ContainerLifecycle::Start,
+                    })
+            }
+            (Tab::Container, ContextAction::Stop) => {
+                self.selected_container_id()
+                    .map(|id| TaskRequest::ContainerLifecycle {
+                        id,
+                        operation: ContainerLifecycle::Stop,
+                    })
+            }
+            (Tab::Container, ContextAction::Restart) => {
+                self.selected_container_id()
+                    .map(|id| TaskRequest::ContainerLifecycle {
+                        id,
+                        operation: ContainerLifecycle::Restart,
+                    })
+            }
+            (Tab::Container, ContextAction::Remove) => {
+                self.selected_container_id()
+                    .map(|id| TaskRequest::ContainerLifecycle {
+                        id,
+                        operation: ContainerLifecycle::Remove,
+                    })
+            }
+            (Tab::Image, ContextAction::History) => {
+                self.selected_resource_id(ResourceKind::Image).map(|id| {
+                    self.execute_command(CommandSpec::new("docker").args(["history"]).arg(id))
+                        .unwrap()
+                })
+            }
+            (Tab::Image, ContextAction::Remove) => {
+                self.selected_resource_id(ResourceKind::Image).map(|id| {
+                    self.execute_destructive_command(
+                        CommandSpec::new("docker").args(["rmi"]).arg(id),
+                    )
+                    .unwrap()
+                })
+            }
+            (Tab::Network, ContextAction::Remove) => {
+                self.selected_resource_id(ResourceKind::Network).map(|id| {
+                    self.execute_destructive_command(
+                        CommandSpec::new("docker").args(["network", "rm"]).arg(id),
+                    )
+                    .unwrap()
+                })
+            }
+            (Tab::Volume, ContextAction::Remove) => {
+                self.selected_resource_id(ResourceKind::Volume).map(|id| {
+                    self.execute_destructive_command(
+                        CommandSpec::new("docker").args(["volume", "rm"]).arg(id),
+                    )
+                    .unwrap()
+                })
+            }
+            _ => None,
+        };
+        self.overlay = Overlay::None;
+        request
     }
 
     pub fn filtered_containers(&self) -> Vec<ContainerRow> {
@@ -538,6 +782,107 @@ impl App {
 
     pub fn set_task_status(&mut self, status: impl Into<String>) {
         self.task_status = status.into();
+    }
+
+    pub fn set_policy(&mut self, policy: SafetyPolicy) {
+        self.policy = policy;
+    }
+
+    pub fn tick(&mut self) {
+        self.notifications.tick();
+    }
+
+    pub fn notify(
+        &mut self,
+        kind: notifications::NotificationKind,
+        message: impl Into<String>,
+        persistent: bool,
+    ) {
+        self.notifications.push(kind, message, persistent);
+    }
+
+    pub fn dismiss_notification(&mut self) {
+        self.notifications.dismiss();
+    }
+
+    pub fn palette_query_push(&mut self, character: char) {
+        if let Overlay::Palette { query, selected } = &mut self.overlay {
+            query.push(character);
+            *selected = 0;
+        }
+    }
+
+    pub fn palette_query_backspace(&mut self) {
+        if let Overlay::Palette { query, selected } = &mut self.overlay {
+            query.pop();
+            *selected = 0;
+        }
+    }
+
+    pub fn palette_move(&mut self, delta: i32) {
+        let Overlay::Palette { query, .. } = &self.overlay else {
+            return;
+        };
+        let query = query.clone();
+        let count =
+            commands::filtered(&*self, &query, self.policy, self.task_status != "idle").len();
+        if count == 0 {
+            return;
+        }
+        let Overlay::Palette { selected, .. } = &mut self.overlay else {
+            return;
+        };
+        *selected = ((*selected as i32 + delta).rem_euclid(count as i32)) as usize;
+    }
+
+    pub fn palette_request(&mut self) -> Option<TaskRequest> {
+        let Overlay::Palette { query, selected } = &self.overlay else {
+            return None;
+        };
+        let entries = commands::filtered(self, query, self.policy, self.task_status != "idle");
+        let entry = entries.get(*selected)?;
+        if !entry.enabled {
+            self.notify(
+                notifications::NotificationKind::Warning,
+                entry
+                    .reason
+                    .clone()
+                    .unwrap_or_else(|| "acción no disponible".to_string()),
+                false,
+            );
+            return None;
+        }
+        let request = commands::request(self, entry.id);
+        if !matches!(self.overlay, Overlay::Search(_))
+            && !matches!(
+                entry.id,
+                commands::CommandId::Filter | commands::CommandId::ContextActions
+            )
+        {
+            self.overlay = Overlay::None;
+        }
+        request
+    }
+
+    pub fn context_move(&mut self, delta: i32) {
+        if !matches!(self.overlay, Overlay::Context { .. }) {
+            return;
+        }
+        let count = self.context_actions().len();
+        if count > 0 {
+            let Overlay::Context { selected } = &mut self.overlay else {
+                return;
+            };
+            *selected = ((*selected as i32 + delta).rem_euclid(count as i32)) as usize;
+        }
+    }
+
+    pub fn context_request_selected(&mut self) -> Option<TaskRequest> {
+        let Overlay::Context { selected } = self.overlay else {
+            return None;
+        };
+        let action = self.context_actions().get(selected).copied()?;
+        self.context_request(action)
     }
 
     pub fn focus_label(&self) -> &'static str {
@@ -1654,5 +1999,83 @@ mod tests {
         assert_eq!(app.current_tab, Tab::Image);
         app.previous_tab();
         assert_eq!(app.current_tab, Tab::Container);
+    }
+
+    #[test]
+    fn incremental_search_filters_and_escape_restores_previous_filter() {
+        let mut app = App::new();
+        app.set_containers(vec![
+            ContainerRow {
+                id: "one".into(),
+                name: "api".into(),
+                image: "demo".into(),
+                state: "running".into(),
+                status: "Up".into(),
+            },
+            ContainerRow {
+                id: "two".into(),
+                name: "worker".into(),
+                image: "demo".into(),
+                state: "exited".into(),
+                status: "Exited".into(),
+            },
+        ]);
+        app.start_search();
+        app.search_push('a');
+        app.search_push('p');
+        assert_eq!(app.filtered_containers().len(), 1);
+        app.cancel_search();
+        assert!(app.container_filter.is_empty());
+        assert_eq!(app.filtered_containers().len(), 2);
+    }
+
+    #[test]
+    fn selection_is_preserved_by_resource_identity() {
+        let mut app = App::new();
+        app.set_images(vec![
+            ImageRow {
+                id: "first".into(),
+                tag: "one".into(),
+                size: 1,
+            },
+            ImageRow {
+                id: "second".into(),
+                tag: "two".into(),
+                size: 2,
+            },
+        ]);
+        app.image_table_state.select(Some(1));
+        app.set_images(vec![
+            ImageRow {
+                id: "second".into(),
+                tag: "two".into(),
+                size: 2,
+            },
+            ImageRow {
+                id: "first".into(),
+                tag: "one".into(),
+                size: 1,
+            },
+        ]);
+        assert_eq!(
+            app.selected_resource_id(ResourceKind::Image).as_deref(),
+            Some("second")
+        );
+    }
+
+    #[test]
+    fn context_actions_follow_container_state_and_keep_request_policy() {
+        let mut app = App::new();
+        app.set_containers(vec![ContainerRow {
+            id: "container".into(),
+            name: "api".into(),
+            image: "demo".into(),
+            state: "running".into(),
+            status: "Up".into(),
+        }]);
+        assert!(app.context_actions().contains(&ContextAction::Stop));
+        assert!(!app.context_actions().contains(&ContextAction::Start));
+        let request = app.context_request(ContextAction::Remove).unwrap();
+        assert_eq!(request.mutation(), Mutation::Destructive);
     }
 }
