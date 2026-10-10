@@ -8,12 +8,62 @@ mod tui;
 use app::App;
 use clap::Parser;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
-use docker::client::EngineConnection;
+use docker::client::{
+    EngineConnection, dashboard_data, list_containers, list_images, list_networks, list_volumes,
+};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use security::SafetyPolicy;
 use std::{io, time::Duration};
 use tasks::{TaskEvent, TaskManager, TaskRequest};
 use tui::terminal::TerminalGuard;
+
+async fn run_json(
+    config: &config::Config,
+    cli: &config::Cli,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let connection = EngineConnection::connect(config.docker_context.as_deref()).await;
+    let status = connection.status_message();
+    let client = match connection.into_client() {
+        Some(client) => client,
+        None => {
+            println!("{}", serde_json::json!({ "error": status }));
+            return Ok(());
+        }
+    };
+
+    let value = if cli.list_containers {
+        match list_containers(&client).await {
+            Ok(value) => serde_json::json!(value),
+            Err(error) => serde_json::json!({ "error": error }),
+        }
+    } else if cli.list_images {
+        match list_images(&client).await {
+            Ok(value) => serde_json::json!(value),
+            Err(error) => serde_json::json!({ "error": error }),
+        }
+    } else if cli.list_networks {
+        match list_networks(&client).await {
+            Ok(value) => serde_json::json!(value),
+            Err(error) => serde_json::json!({ "error": error }),
+        }
+    } else if cli.list_volumes {
+        match list_volumes(&client).await {
+            Ok(value) => serde_json::json!(value),
+            Err(error) => serde_json::json!({ "error": error }),
+        }
+    } else if cli.dashboard {
+        match dashboard_data(&client, None).await {
+            Ok(value) => serde_json::json!(value),
+            Err(error) => serde_json::json!({ "error": error }),
+        }
+    } else {
+        serde_json::json!({
+            "error": "select one of --list-containers, --list-images, --list-networks, --list-volumes, or --dashboard"
+        })
+    };
+    println!("{}", serde_json::to_string_pretty(&value)?);
+    Ok(())
+}
 
 fn dispatch_request(
     app: &mut App,
@@ -41,7 +91,11 @@ fn dispatch_request(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config = config::Config::load(&config::Cli::parse())?;
+    let cli = config::Cli::parse();
+    let config = config::Config::load(&cli)?;
+    if cli.json {
+        return run_json(&config, &cli).await;
+    }
     let policy = SafetyPolicy::new(config.safe_mode, config.read_only);
     let initial_theme = config.theme;
     let shortcuts = config.shortcuts;
@@ -182,6 +236,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             should_quit = true;
                             None
                         }
+                        (KeyCode::Char('c'), _) => {
+                            app.clear_output();
+                            None
+                        }
                         (KeyCode::Char(key), _) if key == shortcuts.cancel_task => {
                             if task_manager.cancel() {
                                 app.push_output("[task cancelled]");
@@ -236,6 +294,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         (KeyCode::Down, _) => {
                             app.next();
+                            None
+                        }
+                        (KeyCode::PageUp, _) => {
+                            app.scroll_output_up(10);
+                            None
+                        }
+                        (KeyCode::PageDown, _) => {
+                            app.scroll_output_down(10);
+                            None
+                        }
+                        (KeyCode::Home, _) => {
+                            app.scroll_output_home();
+                            None
+                        }
+                        (KeyCode::End, _) => {
+                            app.scroll_output_end();
                             None
                         }
                         (KeyCode::Enter, _) => app.execute_selected(),

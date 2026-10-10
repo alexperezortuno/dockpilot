@@ -71,6 +71,21 @@ pub struct Cli {
     /// Interface theme.
     #[arg(long, value_name = "NAME")]
     pub theme: Option<ThemeName>,
+
+    /// Emit one JSON result and exit without starting the TUI.
+    #[arg(long)]
+    pub json: bool,
+
+    #[arg(long)]
+    pub list_containers: bool,
+    #[arg(long)]
+    pub list_images: bool,
+    #[arg(long)]
+    pub list_networks: bool,
+    #[arg(long)]
+    pub list_volumes: bool,
+    #[arg(long)]
+    pub dashboard: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
