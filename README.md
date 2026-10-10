@@ -41,7 +41,10 @@ Completed:
   - `:` command palette with typed commands, availability reasons, and safe dispatch.
   - `/` incremental resource search with case-insensitive filtering and ID-preserved selection.
   - `a` context actions for selected Docker resources, using existing safety confirmation.
-  - bounded, expiring success/info/warning/error notifications.
+ - bounded, expiring success/info/warning/error notifications.
+- UX-003 visual observability foundations:
+  - elapsed-time CPU, memory, network and block-I/O samples in bounded circular buffers.
+  - configurable alert thresholds and cooldowns, plus typed log and task-monitor primitives.
 
 The current TUI provides dashboard, container, image, network, volume, project, and help tabs. Legacy Docker Machine support was removed; use Docker contexts for local, TCP, or SSH engines.
 
@@ -122,9 +125,11 @@ Supported environment variables and CLI flags:
 | Read-only mode | `DOCKPILOT_READ_ONLY` | `--read-only BOOL` |
 | Docker context | `DOCKPILOT_DOCKER_CONTEXT` | `--docker-context NAME` |
 | Theme | `config.toml` | `--theme dark|light|mono` |
+| Metrics interval/capacity | `config.toml` | `metrics_interval_ms` / `metrics_capacity` |
 
 Polling intervals must be between 10 and 5000 milliseconds, and the project folder must exist.
 Named Docker contexts are resolved through explicit `docker context inspect` arguments and support local, TCP, and SSH endpoints. Read-only mode applies equally to the selected local or remote context.
+Metrics are retained only for the configured circular capacity. Alert thresholds and cooldown use `alert_cpu_percent`, `alert_memory_percent`, and `alert_cooldown_seconds`; containers without a healthcheck are never inferred healthy.
 Theme changes are cycled with the configured theme shortcut and saved to `dockpilot.preferences.toml` on exit.
 
 ## Controls
