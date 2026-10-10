@@ -76,6 +76,23 @@ impl TaskHistory {
     pub fn records(&self) -> impl DoubleEndedIterator<Item = &TaskRecord> {
         self.records.iter()
     }
+
+    pub fn recent_summary(&self, now: Instant) -> Vec<String> {
+        self.records
+            .iter()
+            .rev()
+            .take(3)
+            .map(|record| {
+                format!(
+                    "#{} {} {:?} {}s",
+                    record.id,
+                    record.description,
+                    record.state,
+                    record.duration(now).as_secs()
+                )
+            })
+            .collect()
+    }
     fn find(&mut self, id: u64) -> Option<&mut TaskRecord> {
         self.records.iter_mut().find(|record| record.id == id)
     }
