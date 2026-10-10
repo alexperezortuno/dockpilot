@@ -43,7 +43,10 @@
   - Incremental resource search `/` for containers, images, networks, and volumes with filter restoration and ID-preserved selection.
   - Context actions `a` derived from selected resource state and routed through existing `TaskRequest` and safety policy.
   - Bounded expiring notifications integrated with task results and persistent critical errors.
-  - Tests for command filtering, search restoration, selection preservation, context policy, notification expiration, and 120x40/80x24/60x20 rendering.
+   - Tests for command filtering, search restoration, selection preservation, context policy, notification expiration, and 120x40/80x24/60x20 rendering.
+- [x] UX-003: Visual observability foundations.
+  - Bounded elapsed-time metric calculations, Docker stats extraction, alert cooldowns, visual log classification, and typed bounded task history primitives.
+  - Configuration example documents metric retention and alert thresholds.
 
 ## First agent assignment
 Implement DS-001 only. Inspect the repository, run baseline checks where available, and report shell interpolation, blocking subprocess calls, hardcoded parameters, broken output scrolling and Compose working-directory behavior. Do not refactor before reporting findings.
