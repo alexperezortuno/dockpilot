@@ -4,7 +4,7 @@ Dockpilot is a keyboard-first Rust TUI for managing Docker Engine and Docker Com
 
 ## Current status
 
-Dockpilot `0.5.0-beta.1` is the first public beta candidate. It is suitable for evaluation, but behavior and packaging may change before a stable release.
+Dockpilot `0.5.1` is the first public beta candidate. It is suitable for evaluation, but behavior and packaging may change before a stable release.
 
 Supported release targets:
 
@@ -20,9 +20,9 @@ The release workflow builds all four targets. A target is not considered tested 
 Download a release archive and verify `SHA256SUMS.txt`, or review the installer before running it:
 
 ```bash
-curl --fail --location https://raw.githubusercontent.com/alexperezortuno/dockpilot/v0.5.0-beta.1/scripts/install.sh -o /tmp/dockpilot-install.sh
+curl --fail --location https://raw.githubusercontent.com/alexperezortuno/dockpilot/v0.5.1/scripts/install.sh -o /tmp/dockpilot-install.sh
 less /tmp/dockpilot-install.sh
-bash /tmp/dockpilot-install.sh 0.5.0-beta.1
+bash /tmp/dockpilot-install.sh 0.5.1
 dockpilot --version
 ```
 
