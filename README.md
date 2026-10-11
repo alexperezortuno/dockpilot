@@ -121,7 +121,7 @@ The manual `Docker integration` workflow runs the same ignored test in GitHub Ac
 
 ## Releases
 
-Dockpilot follows SemVer. Beta versions use `MAJOR.MINOR.PATCH-beta.N`; stable releases use `MAJOR.MINOR.PATCH`. The package version in `Cargo.toml` is the source of truth. A matching `v0.5.0-beta.1` tag is required before the release workflow runs. It creates a GitHub prerelease only after all builds, tests, artifact checks, SHA-256 verification, and provenance attestation steps succeed. See [docs/release-process.md](docs/release-process.md).
+Dockpilot follows SemVer. Beta versions use `MAJOR.MINOR.PATCH-beta.N`; stable releases use `MAJOR.MINOR.PATCH`. The package version in `Cargo.toml` is the source of truth. A matching `v0.5.1` tag is required before the release workflow runs. It creates a GitHub prerelease only after all builds, tests, artifact checks, SHA-256 verification, and provenance attestation steps succeed. See [docs/release-process.md](docs/release-process.md).
 
 ## Documentation
 
@@ -136,7 +136,7 @@ Dockpilot follows SemVer. Beta versions use `MAJOR.MINOR.PATCH-beta.N`; stable r
 - [Testing](docs/testing.md)
 - [Platform compatibility](docs/platform-compatibility.md)
 - [Release process](docs/release-process.md)
-- [Beta release notes](docs/releases/v0.5.0-beta.1.md)
+- [Beta release notes](docs/releases/v0.5.1.md)
 
 ## Known limitations
 

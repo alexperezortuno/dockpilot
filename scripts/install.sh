@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPOSITORY="alexperezortuno/dockpilot"
-VERSION="${DOCKPILOT_VERSION:-0.5.0-beta.1}"
+VERSION="${DOCKPILOT_VERSION:-0.5.1}"
 INSTALL_DIR="${DOCKPILOT_INSTALL_DIR:-$HOME/.local/bin}"
 
 usage() {
