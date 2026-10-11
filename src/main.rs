@@ -2,6 +2,7 @@ mod app;
 mod config;
 mod docker;
 mod security;
+mod system;
 mod tasks;
 mod tui;
 
@@ -149,9 +150,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     app.push_output(format!("[docker] {}", engine_status_display));
     let mut task_manager = TaskManager::new(32);
     task_manager.set_client(engine_client);
-    if task_manager.has_client() {
-        task_manager.spawn_with_origin(TaskRequest::ListContainers, TaskOrigin::System);
-    }
+    task_manager.spawn_with_origin(TaskRequest::SystemInfo, TaskOrigin::System);
     let poll_interval = Duration::from_millis(config.poll_interval_ms);
     let mut pending_confirmation: Option<TaskRequest> = None;
     let mut should_quit = false;
@@ -162,6 +161,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut last_image_refresh = Instant::now();
     let mut last_network_refresh = Instant::now();
     let mut last_volume_refresh = Instant::now();
+    let mut last_system_refresh = Instant::now();
     let mut task_origins = HashMap::new();
     let mut background_cursor = 0usize;
     let mut last_draw = Instant::now() - Duration::from_millis(250);
@@ -332,7 +332,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     task_manager.complete(id);
                 }
+                TaskEvent::System { id, snapshot } => {
+                    let (origin, description) = task_origins
+                        .remove(&id)
+                        .unwrap_or((TaskOrigin::User, String::new()));
+                    let load_containers = origin == TaskOrigin::System && task_manager.has_client();
+                    app.set_system_snapshot(snapshot);
+                    app.set_task_status("idle");
+                    if origin == TaskOrigin::Background && app.refresh_recovered(&description) {
+                        app.notify(NotificationKind::Info, "System refresh recovered", false);
+                    }
+                    task_manager.complete(id);
+                    if load_containers {
+                        task_manager
+                            .spawn_with_origin(TaskRequest::ListContainers, TaskOrigin::System);
+                    }
+                }
             }
+        }
+
+        if task_manager.is_idle()
+            && app.auto_refresh
+            && last_system_refresh.elapsed()
+                >= Duration::from_millis(config.poll_interval_ms.max(1000))
+        {
+            last_system_refresh = Instant::now();
+            task_manager.spawn_with_origin(TaskRequest::SystemInfo, TaskOrigin::Background);
         }
 
         if task_manager.has_client() && task_manager.is_idle() && app.auto_refresh {
@@ -572,6 +597,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         (KeyCode::Char('i'), _) => Some(TaskRequest::ListImages),
                         (KeyCode::Char('n'), _) => Some(TaskRequest::ListNetworks),
                         (KeyCode::Char('v'), _) => Some(TaskRequest::ListVolumes),
+                        (KeyCode::Char('S'), _) => Some(TaskRequest::SystemInfo),
                         (KeyCode::Char('e'), _) => Some(TaskRequest::Events),
                         (KeyCode::Char('u'), _) => Some(TaskRequest::DiskUsage { preview: false }),
                         (KeyCode::Char('K'), _) => Some(TaskRequest::DiskUsage { preview: true }),
