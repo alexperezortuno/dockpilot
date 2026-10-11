@@ -61,6 +61,10 @@ impl NotificationQueue {
         self.items.pop_front();
     }
 
+    pub fn dismiss_latest(&mut self) {
+        self.items.pop_back();
+    }
+
     pub fn items(&self) -> impl DoubleEndedIterator<Item = &Notification> {
         self.items.iter()
     }
@@ -100,5 +104,20 @@ mod tests {
         assert_eq!(queue.items().count(), 1);
         queue.dismiss();
         assert_eq!(queue.items().count(), 0);
+    }
+
+    #[test]
+    fn latest_notification_can_be_dismissed_without_removing_older_items() {
+        let mut queue = NotificationQueue::default();
+        queue.push(NotificationKind::Info, "older", false);
+        queue.push(NotificationKind::Warning, "confirmation", true);
+
+        queue.dismiss_latest();
+
+        assert_eq!(queue.items().count(), 1);
+        assert_eq!(
+            queue.items().next().map(|item| item.message.as_str()),
+            Some("older")
+        );
     }
 }
