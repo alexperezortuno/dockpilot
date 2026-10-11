@@ -33,6 +33,7 @@
 - [x] DS-022: CI, integration tests, documentation and release packaging.
 
 ## UX
+- [x] UX-006: Local system information tab with asynchronous host metrics, resource details, and refresh behavior.
 - [x] UX-001: Responsive layout, explicit focus, contextual details, and adaptive TUI states.
   - Rendering extracted to `src/tui/screens/`.
   - Reusable widgets for tables, actions, details, navigation, and empty states.
