@@ -55,6 +55,7 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
         "Network",
         "Volume",
         "Project",
+        "System",
         "Help",
     ];
     let selected_tab = match app.current_tab {
@@ -64,7 +65,8 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
         Tab::Network => 3,
         Tab::Volume => 4,
         Tab::Project => 5,
-        Tab::Help => 6,
+        Tab::System => 6,
+        Tab::Help => 7,
     };
 
     let tabs = Tabs::new(tab_titles)
@@ -97,9 +99,10 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
         Tab::Project | Tab::Help => {
             screens::resources::draw_actions(f, app, layout.content, colors)
         }
+        Tab::System => screens::system::draw(f, app, layout.content, colors),
     }
 
-    if !matches!(app.current_tab, Tab::Dashboard)
+    if !matches!(app.current_tab, Tab::Dashboard | Tab::System)
         && let Some(area) = layout.input
     {
         widgets::input::draw(f, app, area);
@@ -149,6 +152,7 @@ mod tests {
                 Tab::Network,
                 Tab::Volume,
                 Tab::Project,
+                Tab::System,
                 Tab::Help,
             ] {
                 app.current_tab = tab;

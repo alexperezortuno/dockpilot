@@ -8,6 +8,7 @@ use crate::{
         },
     },
     security::{Mutation, SafetyPolicy},
+    system::SystemSnapshot,
     tasks::TaskRequest,
 };
 use ratatui::widgets::ListState;
@@ -121,6 +122,7 @@ pub enum Tab {
     Network,
     Volume,
     Project,
+    System,
     Help,
 }
 
@@ -255,6 +257,7 @@ pub struct App {
     pub(crate) metrics_history: monitoring::MetricsHistory,
     pub(crate) latest_metrics: Option<monitoring::MetricSample>,
     pub(crate) health: Option<HealthSnapshot>,
+    pub(crate) system_snapshot: Option<SystemSnapshot>,
     pub(crate) auto_refresh: bool,
     pub(crate) show_output: bool,
     pub(crate) show_details: bool,
@@ -375,6 +378,7 @@ impl App {
             metrics_history: monitoring::MetricsHistory::new(120),
             latest_metrics: None,
             health: None,
+            system_snapshot: None,
             auto_refresh: true,
             show_output: true,
             show_details: true,
@@ -926,6 +930,10 @@ impl App {
         self.notifications.dismiss();
     }
 
+    pub fn dismiss_latest_notification(&mut self) {
+        self.notifications.dismiss_latest();
+    }
+
     pub fn palette_query_push(&mut self, character: char) {
         if let Overlay::Palette { query, selected } = &mut self.overlay {
             query.push(character);
@@ -1051,7 +1059,7 @@ impl App {
             Tab::Image => Some(TaskRequest::ListImages),
             Tab::Network => Some(TaskRequest::ListNetworks),
             Tab::Volume => Some(TaskRequest::ListVolumes),
-            Tab::Project | Tab::Help => None,
+            Tab::Project | Tab::System | Tab::Help => None,
         }
     }
 
@@ -1142,6 +1150,11 @@ impl App {
         self.mark_dirty();
     }
 
+    pub fn set_system_snapshot(&mut self, snapshot: SystemSnapshot) {
+        self.system_snapshot = Some(snapshot);
+        self.mark_dirty();
+    }
+
     // --- Generic navigation ---
     fn next_in_list(state: &mut ListState, len: usize) {
         navigation::next_list(state, len);
@@ -1200,7 +1213,7 @@ impl App {
             Tab::Project => {
                 Self::next_in_list(&mut self.project_list_state, self.project_actions.len())
             }
-            Tab::Help => {}
+            Tab::System | Tab::Help => {}
         }
     }
 
@@ -1248,7 +1261,7 @@ impl App {
             Tab::Project => {
                 Self::previous_in_list(&mut self.project_list_state, self.project_actions.len())
             }
-            Tab::Help => {}
+            Tab::System | Tab::Help => {}
         }
     }
 
@@ -1259,7 +1272,8 @@ impl App {
             Tab::Image => Tab::Network,
             Tab::Network => Tab::Volume,
             Tab::Volume => Tab::Project,
-            Tab::Project => Tab::Help,
+            Tab::Project => Tab::System,
+            Tab::System => Tab::Help,
             Tab::Help => Tab::Dashboard,
         };
         self.sync_focus_target();
@@ -1273,7 +1287,8 @@ impl App {
             Tab::Network => Tab::Image,
             Tab::Volume => Tab::Network,
             Tab::Project => Tab::Volume,
-            Tab::Help => Tab::Project,
+            Tab::System => Tab::Project,
+            Tab::Help => Tab::System,
         };
         self.sync_focus_target();
     }
@@ -1813,7 +1828,7 @@ impl App {
                 }
                 None
             }
-            Tab::Help => None,
+            Tab::System | Tab::Help => None,
         }
     }
 }
@@ -2229,6 +2244,15 @@ mod tests {
         assert_eq!(app.current_tab, Tab::Image);
         app.previous_tab();
         assert_eq!(app.current_tab, Tab::Container);
+
+        for _ in 0..5 {
+            app.next_tab();
+        }
+        assert_eq!(app.current_tab, Tab::System);
+        app.next_tab();
+        assert_eq!(app.current_tab, Tab::Help);
+        app.previous_tab();
+        assert_eq!(app.current_tab, Tab::System);
     }
 
     #[test]
