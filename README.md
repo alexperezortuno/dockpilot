@@ -4,7 +4,7 @@ Dockpilot is a keyboard-first Rust TUI for managing Docker Engine and Docker Com
 
 ## Current status
 
-Dockpilot `0.5.0-beta.1` is the first public beta candidate. It is suitable for evaluation, but behavior and packaging may change before a stable release.
+Dockpilot `0.5.1` is the first public beta candidate. It is suitable for evaluation, but behavior and packaging may change before a stable release.
 
 Supported release targets:
 
@@ -20,9 +20,9 @@ The release workflow builds all four targets. A target is not considered tested 
 Download a release archive and verify `SHA256SUMS.txt`, or review the installer before running it:
 
 ```bash
-curl --fail --location https://raw.githubusercontent.com/alexperezortuno/dockpilot/v0.5.0-beta.1/scripts/install.sh -o /tmp/dockpilot-install.sh
+curl --fail --location https://raw.githubusercontent.com/alexperezortuno/dockpilot/v0.5.1/scripts/install.sh -o /tmp/dockpilot-install.sh
 less /tmp/dockpilot-install.sh
-bash /tmp/dockpilot-install.sh 0.5.0-beta.1
+bash /tmp/dockpilot-install.sh 0.5.1
 dockpilot --version
 ```
 
@@ -76,8 +76,11 @@ Completed:
   - conditional rendering skips idle `terminal.draw` calls while preserving event and notification invalidation.
   - background scheduling rotates across resource lists, metrics, and healthchecks without starting duplicate tasks.
   - refresh incidents are independent per task context, command-palette `j`/`k` input is preserved, and task durations are measured from start to finish.
+- UX-006 local system information tab:
+  - asynchronous local host collection for OS, kernel, CPU, load, memory, swap, disks, networks, and Dockpilot runtime data.
+  - local system data remains available when Docker is disconnected and never follows a remote Docker context.
 
-The current TUI provides dashboard, container, image, network, volume, project, and help tabs. Legacy Docker Machine support was removed; use Docker contexts for local, TCP, or SSH engines.
+The current TUI provides dashboard, container, image, network, volume, project, system, and help tabs. The System tab reports local host identity, CPU, memory, swap, disks, network interfaces, and Dockpilot runtime details. It never reports remote Docker hosts or secrets. Legacy Docker Machine support was removed; use Docker contexts for local, TCP, or SSH engines.
 
 > Important: The dedicated log buffer is bounded to 2,000 lines, and general command output uses the configured bounded `VecDeque`. Safety policy is configured at startup; safe mode confirms mutations, destructive actions always require confirmation, and read-only mode blocks mutations.
 
@@ -102,7 +105,7 @@ cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-Current validation includes 66 unit tests covering application navigation, UX layout/focus rendering, dirty rendering, JSON query dispatch, guarded volume backup dispatch, disk usage policy, bounded output/events/alerts, independent refresh incidents, network/volume listing dispatch, theme and shortcut configuration, context endpoint parsing, image listing dispatch, Compose profile dispatch, dashboard requests, container filtering and inspection, bounded logs, configuration precedence, terminal restoration, safe command arguments, task cancellation, lifecycle policy, task duration, palette text input, context actions, output scrolling, and engine status.
+Current validation includes 68 unit tests covering application navigation, UX layout/focus rendering, dirty rendering, JSON query dispatch, guarded volume backup dispatch, disk usage policy, bounded output/events/alerts, independent refresh incidents, network/volume listing dispatch, theme and shortcut configuration, context endpoint parsing, image listing dispatch, Compose profile dispatch, dashboard requests, container filtering and inspection, bounded logs, configuration precedence, terminal restoration, safe command arguments, task cancellation, lifecycle policy, task duration, palette text input, context actions, output scrolling, engine status, and local system information formatting/collection.
 
 UX-001 uses `Tab`/`Shift+Tab` for ordered pane focus and `Left`/`Right` for resource tabs. The `m` shortcut remains available for focus changes. The current focus is shown in the footer and selected resource details appear beside focused tables.
 
@@ -118,7 +121,7 @@ The manual `Docker integration` workflow runs the same ignored test in GitHub Ac
 
 ## Releases
 
-Dockpilot follows SemVer. Beta versions use `MAJOR.MINOR.PATCH-beta.N`; stable releases use `MAJOR.MINOR.PATCH`. The package version in `Cargo.toml` is the source of truth. A matching `v0.5.0-beta.1` tag is required before the release workflow runs. It creates a GitHub prerelease only after all builds, tests, artifact checks, SHA-256 verification, and provenance attestation steps succeed. See [docs/release-process.md](docs/release-process.md).
+Dockpilot follows SemVer. Beta versions use `MAJOR.MINOR.PATCH-beta.N`; stable releases use `MAJOR.MINOR.PATCH`. The package version in `Cargo.toml` is the source of truth. A matching `v0.5.1` tag is required before the release workflow runs. It creates a GitHub prerelease only after all builds, tests, artifact checks, SHA-256 verification, and provenance attestation steps succeed. See [docs/release-process.md](docs/release-process.md).
 
 ## Documentation
 
@@ -133,7 +136,7 @@ Dockpilot follows SemVer. Beta versions use `MAJOR.MINOR.PATCH-beta.N`; stable r
 - [Testing](docs/testing.md)
 - [Platform compatibility](docs/platform-compatibility.md)
 - [Release process](docs/release-process.md)
-- [Beta release notes](docs/releases/v0.5.0-beta.1.md)
+- [Beta release notes](docs/releases/v0.5.1.md)
 
 ## Known limitations
 
@@ -218,6 +221,7 @@ Theme changes are cycled with the configured theme shortcut and saved to `dockpi
 | `p` | Pause/resume log display |
 | `L` | Cycle minimum log severity filter |
 | `T` | Toggle Docker log timestamps for the next log request |
+| `S` | Refresh local system information |
 | `d` | Refresh dashboard data |
 | `i` | Refresh image listing |
 | `t` | Cycle theme |
