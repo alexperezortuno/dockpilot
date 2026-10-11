@@ -435,6 +435,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 match code {
                     KeyCode::Char('y') | KeyCode::Char('Y') => {
                         if let Some(request) = pending_confirmation.take() {
+                            app.dismiss_latest_notification();
                             dispatch_request(
                                 &mut app,
                                 &mut task_manager,
@@ -447,6 +448,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                         pending_confirmation = None;
+                        app.dismiss_latest_notification();
                         app.push_output("[action cancelled]");
                     }
                     _ => {}
