@@ -11,6 +11,7 @@ use crate::{
         run_command, run_stop_all,
     },
     security::Mutation,
+    system::SystemSnapshot,
 };
 use bollard::query_parameters::EventsOptions;
 use bollard::query_parameters::LogsOptionsBuilder;
@@ -53,6 +54,7 @@ pub enum TaskRequest {
         preview: bool,
     },
     Events,
+    SystemInfo,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,6 +87,7 @@ impl TaskRequest {
             Self::Health { .. } => Mutation::ReadOnly,
             Self::DiskUsage { .. } => Mutation::ReadOnly,
             Self::Events => Mutation::ReadOnly,
+            Self::SystemInfo => Mutation::ReadOnly,
         }
     }
 
@@ -123,6 +126,7 @@ impl TaskRequest {
             }
             .to_string(),
             Self::Events => "stream Docker events".to_string(),
+            Self::SystemInfo => "inspect local system".to_string(),
         }
     }
 }
@@ -183,6 +187,10 @@ pub enum TaskEvent {
     EventLine {
         line: String,
         alert: Option<String>,
+    },
+    System {
+        id: u64,
+        snapshot: SystemSnapshot,
     },
 }
 
@@ -279,6 +287,7 @@ impl TaskManager {
                 }
                 .to_string(),
                 TaskRequest::Events => "streaming Docker events".to_string(),
+                TaskRequest::SystemInfo => "querying local system".to_string(),
             };
             if sender
                 .send(TaskEvent::Progress {
@@ -760,6 +769,21 @@ impl TaskManager {
                             .await;
                     }
                 },
+                TaskRequest::SystemInfo => {
+                    let snapshot = match tokio::task::spawn_blocking(crate::system::collect).await {
+                        Ok(snapshot) => snapshot,
+                        Err(error) => {
+                            let _ = sender
+                                .send(TaskEvent::Failed {
+                                    id,
+                                    message: format!("system information failed: {}", error),
+                                })
+                                .await;
+                            return;
+                        }
+                    };
+                    let _ = sender.send(TaskEvent::System { id, snapshot }).await;
+                }
             }
         });
 
