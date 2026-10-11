@@ -4,7 +4,7 @@ Dockpilot is a keyboard-first Rust TUI for managing Docker Engine and Docker Com
 
 ## Current status
 
-Dockpilot `0.5.0-beta.1` is the first public beta candidate. It is suitable for evaluation, but behavior and packaging may change before a stable release.
+Dockpilot `0.5.1` is the first public beta candidate. It is suitable for evaluation, but behavior and packaging may change before a stable release.
 
 Supported release targets:
 
@@ -20,9 +20,9 @@ The release workflow builds all four targets. A target is not considered tested 
 Download a release archive and verify `SHA256SUMS.txt`, or review the installer before running it:
 
 ```bash
-curl --fail --location https://raw.githubusercontent.com/alexperezortuno/dockpilot/v0.5.0-beta.1/scripts/install.sh -o /tmp/dockpilot-install.sh
+curl --fail --location https://raw.githubusercontent.com/alexperezortuno/dockpilot/v0.5.1/scripts/install.sh -o /tmp/dockpilot-install.sh
 less /tmp/dockpilot-install.sh
-bash /tmp/dockpilot-install.sh 0.5.0-beta.1
+bash /tmp/dockpilot-install.sh 0.5.1
 dockpilot --version
 ```
 
@@ -121,7 +121,7 @@ The manual `Docker integration` workflow runs the same ignored test in GitHub Ac
 
 ## Releases
 
-Dockpilot follows SemVer. Beta versions use `MAJOR.MINOR.PATCH-beta.N`; stable releases use `MAJOR.MINOR.PATCH`. The package version in `Cargo.toml` is the source of truth. A matching `v0.5.0-beta.1` tag is required before the release workflow runs. It creates a GitHub prerelease only after all builds, tests, artifact checks, SHA-256 verification, and provenance attestation steps succeed. See [docs/release-process.md](docs/release-process.md).
+Dockpilot follows SemVer. Beta versions use `MAJOR.MINOR.PATCH-beta.N`; stable releases use `MAJOR.MINOR.PATCH`. The package version in `Cargo.toml` is the source of truth. A matching `v0.5.1` tag is required before the release workflow runs. It creates a GitHub prerelease only after all builds, tests, artifact checks, SHA-256 verification, and provenance attestation steps succeed. See [docs/release-process.md](docs/release-process.md).
 
 ## Documentation
 
@@ -136,7 +136,7 @@ Dockpilot follows SemVer. Beta versions use `MAJOR.MINOR.PATCH-beta.N`; stable r
 - [Testing](docs/testing.md)
 - [Platform compatibility](docs/platform-compatibility.md)
 - [Release process](docs/release-process.md)
-- [Beta release notes](docs/releases/v0.5.0-beta.1.md)
+- [Beta release notes](docs/releases/v0.5.1.md)
 
 ## Known limitations
 
