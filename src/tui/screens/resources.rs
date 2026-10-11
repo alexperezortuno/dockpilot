@@ -46,6 +46,7 @@ pub fn draw_actions(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
             "  x               - Cancel active task",
             "  r               - Manual container refresh",
             "  R               - Toggle automatic refresh",
+            "  S               - Refresh local system information",
             "  o / D / C       - Output / details / compact layout",
             "  c               - Clear general output",
             "  PageUp/PageDown - Scroll output",
