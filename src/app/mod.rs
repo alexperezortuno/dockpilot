@@ -930,6 +930,10 @@ impl App {
         self.notifications.dismiss();
     }
 
+    pub fn dismiss_latest_notification(&mut self) {
+        self.notifications.dismiss_latest();
+    }
+
     pub fn palette_query_push(&mut self, character: char) {
         if let Overlay::Palette { query, selected } = &mut self.overlay {
             query.push(character);
