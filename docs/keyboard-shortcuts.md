@@ -12,6 +12,7 @@
 | `:` | Open the command palette |
 | `/` | Incrementally filter the current resource |
 | `r` / `R` | Refresh / toggle auto-refresh |
+| `S` | Refresh local system information |
 | `x` | Cancel the active task |
 | `o` / `D` / `C` | Toggle output / details / compact layout |
 | `?` | Open help |
