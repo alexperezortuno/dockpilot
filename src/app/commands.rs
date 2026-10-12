@@ -13,6 +13,7 @@ pub enum CommandId {
     Filter,
     InspectSelected,
     ContextActions,
+    ExecShell,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,6 +93,12 @@ pub fn registry(app: &App, policy: SafetyPolicy, task_active: bool) -> Vec<Comma
             "Open actions for the selected resource",
             "a",
         ),
+        entry(
+            CommandId::ExecShell,
+            "Exec into container",
+            "Open an interactive terminal inside the selected container",
+            "exec",
+        ),
     ];
     for item in &mut entries {
         if task_active && !matches!(item.id, CommandId::Filter | CommandId::ContextActions) {
@@ -115,6 +122,27 @@ pub fn registry(app: &App, policy: SafetyPolicy, task_active: bool) -> Vec<Comma
         if matches!(item.id, CommandId::ContextActions) && !resource_tab {
             item.enabled = false;
             item.reason = Some("select a Docker resource".to_string());
+        }
+        if matches!(item.id, CommandId::ExecShell) {
+            if !matches!(app.current_tab, Tab::Container) {
+                item.enabled = false;
+                item.reason = Some("select the container tab".to_string());
+            } else if !policy.allows(crate::security::Mutation::Mutating) {
+                item.enabled = false;
+                item.reason = Some("the read-only context blocks exec sessions".to_string());
+            } else {
+                match app.selected_container_row() {
+                    Some(container) if container.state.eq_ignore_ascii_case("running") => {}
+                    Some(_) => {
+                        item.enabled = false;
+                        item.reason = Some("the selected container is not running".to_string());
+                    }
+                    None => {
+                        item.enabled = false;
+                        item.reason = Some("no container is selected".to_string());
+                    }
+                }
+            }
         }
         if !policy.allows(crate::security::Mutation::ReadOnly) {
             item.enabled = false;
@@ -170,6 +198,12 @@ pub fn request(app: &mut App, id: CommandId) -> Option<TaskRequest> {
         CommandId::InspectSelected => app.execute_selected(),
         CommandId::ContextActions => {
             app.start_context_menu();
+            None
+        }
+        CommandId::ExecShell => {
+            if let Some(container) = app.selected_container_row() {
+                app.start_exec_chooser(container.id, container.name);
+            }
             None
         }
     }
