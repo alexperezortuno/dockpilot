@@ -47,6 +47,46 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect, colors: Palette) {
     );
 }
 
+/// Shell/command picker shown before an exec session starts.
+pub fn draw_exec_picker(f: &mut Frame, app: &App, area: Rect, colors: Palette) {
+    let Overlay::ExecCommand {
+        container_name,
+        selected,
+        ..
+    } = &app.overlay
+    else {
+        return;
+    };
+    let width = area.width.clamp(1, 52);
+    let height = (App::EXEC_CHOICES.len() as u16 + 2).min(area.height.max(3));
+    let rect = Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    );
+    f.render_widget(Clear, rect);
+    let items = App::EXEC_CHOICES.iter().enumerate().map(|(index, choice)| {
+        let mut item = ListItem::new(*choice);
+        if index == *selected {
+            item = item.style(
+                Style::default()
+                    .bg(colors.selection)
+                    .add_modifier(Modifier::BOLD),
+            );
+        }
+        item
+    });
+    f.render_widget(
+        List::new(items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!("Exec into {}", container_name)),
+        ),
+        rect,
+    );
+}
+
 fn label(action: ContextAction) -> &'static str {
     match action {
         ContextAction::Inspect => "Inspect selected resource",
@@ -56,5 +96,6 @@ fn label(action: ContextAction) -> &'static str {
         ContextAction::Logs => "Follow logs",
         ContextAction::Remove => "Remove resource (confirmation required)",
         ContextAction::History => "Image history",
+        ContextAction::Exec => "Exec into container (interactive)",
     }
 }
