@@ -240,6 +240,8 @@ The `f` filter opens the existing parameter prompt. `/` applies an incremental f
 
 Notifications are transient by default. Critical errors and pending safety confirmations remain visible until dismissed with `Backspace`; detailed task output remains in the bounded output history.
 
+  When a running container is selected, `a` or the command palette offers an interactive Exec session. Choose `/bin/sh`, `/bin/bash`, or a custom argv command. `Ctrl+C` is sent to the container; `Ctrl+]` detaches without stopping the remote process. Exec traffic is rendered in its own emulated terminal and is not added to general Output.
+
 Background refreshes run independently per resource interval and never chain all Docker queries. Successful background refreshes update tables silently; failures are grouped per resource/task until recovery. Metrics and healthchecks rotate fairly with list refreshes. Disable them with `R`.
 
 When the container table has focus, `Enter` inspects the selected container. Lifecycle mutations use Bollard and still pass through safe-mode confirmation and read-only policy checks.
@@ -255,7 +257,7 @@ When the container table has focus, `Enter` inspects the selected container. Lif
 ## Tabs
 
 - **Dashboard**: Docker Engine version, container health counts, and selected-container CPU/memory statistics.
-- **Container**: start/stop named containers, stop all containers, list containers, logs, create/remove, inspect process state, pause/unpause, update, and wait.
+- **Container**: start/stop named containers, stop all containers, list containers, logs, create/remove, inspect process state, pause/unpause, update, wait, and interactive Exec.
 - **Image**: list images through Bollard, build, rebuild, remove, push, pull, save/load, and history with task progress.
 - **Project**: set the project folder, run Compose up/down/config, and start with a selected Compose profile.
 - **Network**: list networks through Bollard, create, and remove networks.
@@ -293,6 +295,7 @@ Phase 1 is complete. Phase 2 now has a non-fatal Docker Engine connection check 
 - Docker unavailability is shown as an actionable disconnected state.
 - Terminal state is restored after failures.
 - Secrets and credentials are never logged or stored.
+- Exec is blocked by read-only policy and uses the privileges configured inside the container, never host-root execution.
 
 ## Roadmap
 
