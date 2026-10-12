@@ -18,4 +18,18 @@
 | `?` | Open help |
 | `q` / `Esc` / `Ctrl+C` | Quit |
 
+## Exec Mode
+
+Open `Exec into container` from the `a` context menu or command palette on a running container.
+
+| Key | Action |
+| --- | --- |
+| Characters, Enter, Backspace, Tab, arrows | Send input to the container PTY |
+| `Ctrl+C` | Send interrupt to the process inside the container |
+| `Ctrl+]` | Detach and return to Dockpilot; does not terminate the remote process |
+| `Shift+PageUp` / `Shift+PageDown` | Move through bounded terminal scrollback |
+| `Esc` / `Enter` after exit | Close the finished session |
+
 In the command palette, arrows navigate and `j`/`k` are normal text input. Destructive actions always require confirmation.
+
+Exec uses the standard crossterm/xterm key protocol. Terminals using proprietary enhanced-key protocols, kitty graphics, or sixel output may have reduced compatibility.

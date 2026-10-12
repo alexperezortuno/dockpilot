@@ -20,6 +20,7 @@ use std::{
 #[allow(dead_code)]
 pub mod alerts;
 pub mod commands;
+pub mod exec;
 #[allow(dead_code)]
 pub mod health;
 #[allow(dead_code)]
@@ -112,6 +113,7 @@ pub enum ContextAction {
     Logs,
     Remove,
     History,
+    Exec,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -135,9 +137,19 @@ pub enum FocusTarget {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Overlay {
     None,
-    Palette { query: String, selected: usize },
+    Palette {
+        query: String,
+        selected: usize,
+    },
     Search(search::SearchState),
-    Context { selected: usize },
+    Context {
+        selected: usize,
+    },
+    ExecCommand {
+        container_id: String,
+        container_name: String,
+        selected: usize,
+    },
 }
 
 impl FocusTarget {
@@ -181,6 +193,7 @@ pub enum PendingAction {
     VolumeFilter,
     ContainerRestart,
     LogFilter,
+    ContainerExecCustom { id: String, name: String },
     // Image
     ImageRemove,
     ImagePush,
@@ -265,6 +278,7 @@ pub struct App {
     pub(crate) mouse_enabled: bool,
     pub(crate) refresh_status: String,
     refresh_failures: HashMap<String, u32>,
+    pub exec: Option<exec::ExecView>,
     dirty: bool,
 }
 
@@ -386,6 +400,7 @@ impl App {
             mouse_enabled: false,
             refresh_status: "auto-refresh on".to_string(),
             refresh_failures: HashMap::new(),
+            exec: None,
             dirty: true,
         };
 
@@ -532,6 +547,7 @@ impl App {
         if let Some(index) = Self::resource_focus_index(&self.current_tab) {
             self.resource_focus[index] = target;
         }
+        self.mark_dirty();
     }
 
     pub fn focus_next(&mut self) {
@@ -672,7 +688,11 @@ impl App {
                 };
                 let mut actions = vec![ContextAction::Inspect, ContextAction::Logs];
                 if container.state.eq_ignore_ascii_case("running") {
-                    actions.extend([ContextAction::Stop, ContextAction::Restart]);
+                    actions.extend([
+                        ContextAction::Exec,
+                        ContextAction::Stop,
+                        ContextAction::Restart,
+                    ]);
                 } else {
                     actions.push(ContextAction::Start);
                 }
@@ -694,6 +714,12 @@ impl App {
 
     pub fn context_request(&mut self, action: ContextAction) -> Option<TaskRequest> {
         let request = match (self.current_tab.clone(), action) {
+            (Tab::Container, ContextAction::Exec) => {
+                let container = self.selected_container_row()?;
+                self.start_exec_chooser(container.id, container.name);
+                // Keep the chooser overlay instead of clearing it below.
+                return None;
+            }
             (Tab::Container, ContextAction::Inspect) => self
                 .selected_container_id()
                 .map(|id| TaskRequest::InspectContainer { id }),
@@ -985,7 +1011,9 @@ impl App {
         if !matches!(self.overlay, Overlay::Search(_))
             && !matches!(
                 entry.id,
-                commands::CommandId::Filter | commands::CommandId::ContextActions
+                commands::CommandId::Filter
+                    | commands::CommandId::ContextActions
+                    | commands::CommandId::ExecShell
             )
         {
             self.overlay = Overlay::None;
@@ -1046,6 +1074,11 @@ impl App {
             .map(|container| container.id.clone())
     }
 
+    pub fn selected_container_row(&self) -> Option<ContainerRow> {
+        let index = self.container_table_state.selected()?;
+        self.filtered_containers().get(index).cloned()
+    }
+
     pub fn dashboard_request(&self) -> TaskRequest {
         TaskRequest::Dashboard {
             selected_id: self.selected_container_id(),
@@ -1060,6 +1093,72 @@ impl App {
             Tab::Network => Some(TaskRequest::ListNetworks),
             Tab::Volume => Some(TaskRequest::ListVolumes),
             Tab::Project | Tab::System | Tab::Help => None,
+        }
+    }
+
+    // --- Exec sessions ---
+    pub const EXEC_CHOICES: [&'static str; 3] = ["/bin/sh", "/bin/bash", "custom command"];
+
+    pub fn open_exec(&mut self, session: crate::docker::exec::ExecSession, rows: u16, cols: u16) {
+        self.exec = Some(exec::ExecView::new(session, rows, cols));
+        self.mark_dirty();
+    }
+
+    pub fn close_exec(&mut self) {
+        self.exec = None;
+        self.mark_dirty();
+    }
+
+    pub fn exec_active(&self) -> bool {
+        self.exec.is_some()
+    }
+
+    pub fn start_exec_chooser(&mut self, container_id: String, container_name: String) {
+        self.overlay = Overlay::ExecCommand {
+            container_id,
+            container_name,
+            selected: 0,
+        };
+        self.mark_dirty();
+    }
+
+    pub fn exec_choice_move(&mut self, delta: i32) {
+        let Overlay::ExecCommand { selected, .. } = &mut self.overlay else {
+            return;
+        };
+        *selected =
+            ((*selected as i32 + delta).rem_euclid(Self::EXEC_CHOICES.len() as i32)) as usize;
+    }
+
+    /// Enter on the exec chooser: shells produce a request; "custom" asks for a command.
+    pub fn exec_choice_selected(&mut self) -> Option<TaskRequest> {
+        let Overlay::ExecCommand {
+            container_id,
+            container_name,
+            selected,
+        } = self.overlay.clone()
+        else {
+            return None;
+        };
+        self.overlay = Overlay::None;
+        match selected {
+            0 => Some(TaskRequest::OpenExec {
+                id: container_id,
+                name: container_name,
+                command: crate::docker::exec::ExecCommand::Sh,
+            }),
+            1 => Some(TaskRequest::OpenExec {
+                id: container_id,
+                name: container_name,
+                command: crate::docker::exec::ExecCommand::Bash,
+            }),
+            _ => self.start_input(
+                "Command to run inside the container:",
+                PendingAction::ContainerExecCustom {
+                    id: container_id,
+                    name: container_name,
+                },
+            ),
         }
     }
 
@@ -1435,6 +1534,19 @@ impl App {
             PendingAction::LogFilter => {
                 self.log_filter = value.to_string();
                 None
+            }
+            PendingAction::ContainerExecCustom { id, name } => {
+                match crate::docker::exec::split_exec_args(value) {
+                    Ok(argv) => Some(TaskRequest::OpenExec {
+                        id,
+                        name,
+                        command: crate::docker::exec::ExecCommand::Custom(argv),
+                    }),
+                    Err(error) => {
+                        self.push_output(format!("[exec] invalid command: {}", error));
+                        None
+                    }
+                }
             }
             // Image
             PendingAction::ImageRemove => self
@@ -2009,6 +2121,18 @@ mod tests {
     }
 
     #[test]
+    fn container_focus_switches_between_table_and_actions() {
+        let mut app = App::new();
+        assert_eq!(app.focus_target, FocusTarget::Table);
+        app.focus_next();
+        assert_eq!(app.focus_target, FocusTarget::Actions);
+        app.focus_next();
+        assert_eq!(app.focus_target, FocusTarget::Table);
+        app.focus_previous();
+        assert_eq!(app.focus_target, FocusTarget::Actions);
+    }
+
+    #[test]
     fn dirty_state_is_consumed_and_changes_invalidate_rendering() {
         let mut app = App::new();
         assert!(app.take_dirty());
@@ -2368,5 +2492,69 @@ mod tests {
         app.start_context_menu();
 
         assert!(matches!(app.overlay, Overlay::Context { selected: 0 }));
+    }
+
+    #[test]
+    fn exec_is_available_only_for_running_containers() {
+        let mut app = App::new();
+        app.set_containers(vec![ContainerRow {
+            id: "container".into(),
+            name: "api".into(),
+            image: "demo".into(),
+            state: "exited".into(),
+            status: "Exited".into(),
+        }]);
+        assert!(!app.context_actions().contains(&ContextAction::Exec));
+
+        app.set_containers(vec![ContainerRow {
+            id: "container".into(),
+            name: "api".into(),
+            image: "demo".into(),
+            state: "running".into(),
+            status: "Up".into(),
+        }]);
+        assert!(app.context_actions().contains(&ContextAction::Exec));
+    }
+
+    #[test]
+    fn exec_chooser_uses_container_id_and_supports_custom_argv() {
+        let mut app = App::new();
+        app.set_containers(vec![ContainerRow {
+            id: "full-container-id".into(),
+            name: "api".into(),
+            image: "demo".into(),
+            state: "running".into(),
+            status: "Up".into(),
+        }]);
+
+        app.context_request(ContextAction::Exec);
+        assert!(matches!(
+            app.overlay,
+            Overlay::ExecCommand { selected: 0, .. }
+        ));
+
+        app.exec_choice_move(2);
+        app.exec_choice_selected();
+        app.input_buffer = "printf 'hello world'".into();
+        let request = app.confirm_input().expect("custom exec request");
+        assert!(matches!(
+            request,
+            TaskRequest::OpenExec {
+                id,
+                command: crate::docker::exec::ExecCommand::Custom(argv),
+                ..
+            } if id == "full-container-id" && argv == vec!["printf", "hello world"]
+        ));
+    }
+
+    #[test]
+    fn exec_requests_are_mutating_and_read_only_policy_blocks_them() {
+        let request = TaskRequest::OpenExec {
+            id: "container-id".into(),
+            name: "api".into(),
+            command: crate::docker::exec::ExecCommand::Sh,
+        };
+        assert_eq!(request.mutation(), Mutation::Mutating);
+        assert!(!SafetyPolicy::new(false, true).allows(request.mutation()));
     }
 }
