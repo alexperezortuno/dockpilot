@@ -7,6 +7,7 @@ use crate::{
             inspect_container, list_containers, list_images, list_networks, list_volumes,
             start_all_containers,
         },
+        exec::ExecCommand,
         metrics::container_stats,
         run_command, run_stop_all,
     },
@@ -55,6 +56,11 @@ pub enum TaskRequest {
     },
     Events,
     SystemInfo,
+    OpenExec {
+        id: String,
+        name: String,
+        command: ExecCommand,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,6 +94,7 @@ impl TaskRequest {
             Self::DiskUsage { .. } => Mutation::ReadOnly,
             Self::Events => Mutation::ReadOnly,
             Self::SystemInfo => Mutation::ReadOnly,
+            Self::OpenExec { .. } => Mutation::Mutating,
         }
     }
 
@@ -127,6 +134,9 @@ impl TaskRequest {
             .to_string(),
             Self::Events => "stream Docker events".to_string(),
             Self::SystemInfo => "inspect local system".to_string(),
+            Self::OpenExec { name, command, .. } => {
+                format!("exec {} in {}", command.display(), name)
+            }
         }
     }
 }
@@ -288,6 +298,7 @@ impl TaskManager {
                 .to_string(),
                 TaskRequest::Events => "streaming Docker events".to_string(),
                 TaskRequest::SystemInfo => "querying local system".to_string(),
+                TaskRequest::OpenExec { name, .. } => format!("opening exec session in {}", name),
             };
             if sender
                 .send(TaskEvent::Progress {
@@ -783,6 +794,17 @@ impl TaskManager {
                         }
                     };
                     let _ = sender.send(TaskEvent::System { id, snapshot }).await;
+                }
+                TaskRequest::OpenExec { .. } => {
+                    // Exec sessions are intercepted by the event loop and run
+                    // outside the single-task manager; reaching this arm is a bug.
+                    let _ = sender
+                        .send(TaskEvent::Failed {
+                            id,
+                            message: "exec sessions are managed outside the task manager"
+                                .to_string(),
+                        })
+                        .await;
                 }
             }
         });

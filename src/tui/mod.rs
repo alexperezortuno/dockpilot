@@ -1,3 +1,4 @@
+pub mod exec_keys;
 pub mod layout;
 pub mod screens;
 pub mod terminal;
@@ -41,13 +42,18 @@ pub(crate) fn palette(theme: ThemeName) -> Palette {
 }
 
 pub fn draw_app(f: &mut Frame, app: &mut App) {
+    let colors = palette(app.theme);
+    if app.exec.is_some() {
+        screens::exec::draw(f, app, f.area(), colors);
+        widgets::toast::draw(f, app, f.area(), colors);
+        return;
+    }
     let layout = areas(
         f.area(),
         app.input_mode || matches!(app.overlay, crate::app::Overlay::Search(_)),
         app.show_output,
         app.compact_layout,
     );
-    let colors = palette(app.theme);
     let tab_titles = [
         "Dashboard",
         "Container",
@@ -117,6 +123,7 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
     }
     widgets::command_palette::draw(f, app, f.area(), colors);
     widgets::context_menu::draw(f, app, f.area(), colors);
+    widgets::context_menu::draw_exec_picker(f, app, f.area(), colors);
     widgets::toast::draw(f, app, f.area(), colors);
 }
 
@@ -283,5 +290,36 @@ mod tests {
         let _ = render(80, 12, &mut app);
 
         assert!(app.output_scroll < 40);
+    }
+
+    #[tokio::test]
+    async fn renders_exec_at_small_terminal_sizes() {
+        for (width, height) in [(20u16, 8u16), (40, 12), (80, 24)] {
+            let client = bollard::Docker::connect_with_http(
+                "http://127.0.0.1:9",
+                1,
+                bollard::API_DEFAULT_VERSION,
+            )
+            .expect("unreachable test endpoint");
+            let session = crate::docker::exec::ExecSession::start(
+                client,
+                "container-id".into(),
+                "api".into(),
+                crate::docker::exec::ExecCommand::Sh,
+                height.saturating_sub(6).max(1),
+                width.saturating_sub(2).max(1),
+            );
+            let mut app = App::new();
+            app.open_exec(
+                session,
+                height.saturating_sub(6).max(1),
+                width.saturating_sub(2).max(1),
+            );
+            let backend = TestBackend::new(width, height);
+            let mut terminal = Terminal::new(backend).expect("test terminal");
+            terminal
+                .draw(|frame| draw_app(frame, &mut app))
+                .expect("render");
+        }
     }
 }
