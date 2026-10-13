@@ -145,6 +145,8 @@ pub enum Overlay {
         selected: usize,
     },
     Search(search::SearchState),
+    UnifiedLogSearch,
+    UnifiedLogFilter,
     Context {
         selected: usize,
     },
@@ -214,6 +216,8 @@ pub enum PendingAction {
     VolumeRemove,
     VolumeBackup,
     VolumeRestore,
+    UnifiedLogsExportTxt { filtered: bool },
+    UnifiedLogsExportJsonl { filtered: bool },
     // Project
     ProjectSetFolder,
     ComposeProfileUp,
@@ -252,6 +256,7 @@ pub struct App {
     pub(crate) dashboard: Option<DashboardData>,
     pub(crate) log_lines: VecDeque<String>,
     pub(crate) unified_log_buffer: unified_logs::LogBuffer,
+    pub(crate) unified_log_view: unified_logs::LogViewState,
     pub(crate) log_filter: String,
     pub(crate) log_level_filter: Option<logs::LogLevel>,
     pub(crate) log_timestamps: bool,
@@ -283,6 +288,7 @@ pub struct App {
     pub(crate) refresh_status: String,
     refresh_failures: HashMap<String, u32>,
     pub exec: Option<exec::ExecView>,
+    pub(crate) pending_unified_export: Option<(String, bool, bool)>,
     dirty: bool,
 }
 
@@ -376,6 +382,7 @@ impl App {
             dashboard: None,
             log_lines: VecDeque::new(),
             unified_log_buffer: unified_logs::LogBuffer::new(unified_logs::DEFAULT_CAPACITY),
+            unified_log_view: unified_logs::LogViewState::default(),
             log_filter: String::new(),
             log_level_filter: None,
             log_timestamps: false,
@@ -406,6 +413,7 @@ impl App {
             refresh_status: "auto-refresh on".to_string(),
             refresh_failures: HashMap::new(),
             exec: None,
+            pending_unified_export: None,
             dirty: true,
         };
 
@@ -1182,19 +1190,246 @@ impl App {
         self.mark_dirty();
     }
 
-    pub fn push_unified_log_line(&mut self, line: String) {
-        self.unified_log_buffer.push(unified_logs::LogEvent {
-            sequence: 0,
-            container_id: String::new(),
-            container_name: "selected container".to_string(),
-            compose_project: None,
-            compose_service: None,
-            timestamp: None,
-            stream: unified_logs::LogStream::Stdout,
-            severity: logs::classify(&line),
-            message: line,
-        });
+    pub fn push_unified_log_event(&mut self, event: unified_logs::LogEvent) {
+        self.unified_log_buffer.push(event);
+        if self.unified_log_view.follow && !self.unified_log_view.paused {
+            self.unified_log_view.selected_sequence = self
+                .unified_log_buffer
+                .all()
+                .last()
+                .map(|event| event.sequence);
+        }
         self.mark_dirty();
+    }
+
+    pub fn unified_logs_refresh_view(&mut self) {
+        self.unified_log_view
+            .refresh_cache(&self.unified_log_buffer);
+    }
+
+    pub fn unified_logs_start_search(&mut self) {
+        self.unified_log_view.search_active = true;
+        self.unified_log_view.search_query.clear();
+        self.unified_logs_refresh_view();
+        self.overlay = Overlay::UnifiedLogSearch;
+    }
+
+    pub fn unified_logs_search_push(&mut self, character: char) {
+        self.unified_log_view.search_query.push(character);
+        self.unified_logs_refresh_view();
+        self.unified_log_view.search_hits = unified_logs::search_indices_by_sequence(
+            &self.unified_log_buffer,
+            &self.unified_log_view.cached_sequences,
+            &self.unified_log_view.search_query,
+        );
+        if let Some(sequence) = self.unified_log_view.search_hits.first() {
+            self.unified_log_view.selected_sequence = Some(*sequence);
+        }
+        self.mark_dirty();
+    }
+
+    pub fn unified_logs_search_backspace(&mut self) {
+        self.unified_log_view.search_query.pop();
+        self.unified_logs_search_push_noop();
+    }
+
+    fn unified_logs_search_push_noop(&mut self) {
+        self.unified_logs_refresh_view();
+        self.unified_log_view.search_hits = unified_logs::search_indices_by_sequence(
+            &self.unified_log_buffer,
+            &self.unified_log_view.cached_sequences,
+            &self.unified_log_view.search_query,
+        );
+        self.unified_log_view.search_cursor = 0;
+        if let Some(sequence) = self.unified_log_view.search_hits.first() {
+            self.unified_log_view.selected_sequence = Some(*sequence);
+        }
+        self.mark_dirty();
+    }
+
+    pub fn unified_logs_close_search(&mut self) {
+        self.unified_log_view.search_active = false;
+        self.unified_log_view.search_query.clear();
+        self.mark_dirty();
+    }
+
+    pub fn unified_logs_next_match(&mut self, reverse: bool) {
+        let hits = &self.unified_log_view.search_hits;
+        if hits.is_empty() {
+            return;
+        }
+        let count = hits.len();
+        self.unified_log_view.search_cursor = if reverse {
+            (self.unified_log_view.search_cursor + count - 1) % count
+        } else {
+            (self.unified_log_view.search_cursor + 1) % count
+        };
+        self.unified_log_view.selected_sequence = Some(hits[self.unified_log_view.search_cursor]);
+        self.mark_dirty();
+    }
+
+    pub fn unified_logs_move(&mut self, delta: i32) {
+        self.unified_logs_refresh_view();
+        if self.unified_log_view.cached_sequences.is_empty() {
+            return;
+        }
+        let current = self
+            .unified_log_view
+            .selected_sequence
+            .and_then(|selected| {
+                self.unified_log_view
+                    .cached_sequences
+                    .iter()
+                    .position(|sequence| *sequence == selected)
+            })
+            .unwrap_or(0);
+        let next = (current as i32 + delta)
+            .clamp(0, self.unified_log_view.cached_sequences.len() as i32 - 1)
+            as usize;
+        self.unified_log_view.selected_sequence =
+            Some(self.unified_log_view.cached_sequences[next]);
+        self.unified_log_view.follow = false;
+        self.mark_dirty();
+    }
+
+    pub fn unified_logs_home(&mut self) {
+        self.unified_logs_refresh_view();
+        self.unified_log_view.selected_sequence =
+            self.unified_log_view.cached_sequences.first().copied();
+        self.unified_log_view.follow = false;
+        self.mark_dirty();
+    }
+
+    pub fn unified_logs_end(&mut self) {
+        self.unified_logs_refresh_view();
+        self.unified_log_view.selected_sequence =
+            self.unified_log_view.cached_sequences.last().copied();
+        self.unified_log_view.follow = true;
+        self.mark_dirty();
+    }
+
+    pub fn unified_logs_toggle_follow(&mut self) {
+        self.unified_log_view.follow = !self.unified_log_view.follow;
+        if self.unified_log_view.follow {
+            self.unified_logs_end();
+        } else {
+            self.mark_dirty();
+        }
+    }
+
+    pub fn unified_logs_toggle_pause(&mut self) {
+        self.unified_log_view.paused = !self.unified_log_view.paused;
+        self.mark_dirty();
+    }
+
+    pub fn unified_logs_cycle_filter(&mut self) {
+        self.unified_log_view.filter_field = self.unified_log_view.filter_field.next();
+        self.unified_log_view.filter_editing = true;
+        self.unified_log_view.filter_input.clear();
+        self.overlay = Overlay::UnifiedLogFilter;
+        self.mark_dirty();
+    }
+
+    pub fn unified_logs_filter_push(&mut self, character: char) {
+        self.unified_log_view.filter_input.push(character);
+        self.mark_dirty();
+    }
+
+    pub fn unified_logs_filter_backspace(&mut self) {
+        self.unified_log_view.filter_input.pop();
+        self.mark_dirty();
+    }
+
+    pub fn unified_logs_filter_confirm(&mut self) {
+        let value = (!self.unified_log_view.filter_input.is_empty())
+            .then(|| self.unified_log_view.filter_input.clone());
+        let mut filter = self.unified_log_view.filter.clone();
+        match self.unified_log_view.filter_field {
+            unified_logs::FilterField::Container => filter.container = value,
+            unified_logs::FilterField::ComposeProject => filter.compose_project = value,
+            unified_logs::FilterField::ComposeService => filter.compose_service = value,
+            unified_logs::FilterField::Severity => {
+                filter.minimum_severity = self.unified_log_view.filter_input.parse().ok()
+            }
+            unified_logs::FilterField::Since => filter.since = value,
+            unified_logs::FilterField::Until => filter.until = value,
+            unified_logs::FilterField::Text => filter.text = value,
+        }
+        self.unified_log_view.set_filter(filter);
+        self.unified_log_view.filter_editing = false;
+        self.unified_logs_refresh_view();
+        self.mark_dirty();
+    }
+
+    pub fn unified_logs_export(&mut self, path: &str, jsonl: bool, filtered: bool) {
+        if PathBuf::from(path).exists() {
+            self.pending_unified_export = Some((path.to_string(), jsonl, filtered));
+            self.notify(
+                notifications::NotificationKind::Warning,
+                "Export path exists; press y to overwrite or n to cancel",
+                true,
+            );
+            return;
+        }
+        self.write_unified_logs_export(path, jsonl, filtered, false);
+    }
+
+    fn write_unified_logs_export(
+        &mut self,
+        path: &str,
+        jsonl: bool,
+        filtered: bool,
+        overwrite: bool,
+    ) {
+        self.unified_logs_refresh_view();
+        let events = if filtered {
+            self.unified_log_view
+                .cached_sequences
+                .iter()
+                .filter_map(|sequence| self.unified_log_buffer.get(*sequence))
+                .collect::<Vec<_>>()
+        } else {
+            self.unified_log_buffer.all().collect::<Vec<_>>()
+        };
+        let path = PathBuf::from(path);
+        let result = if jsonl {
+            unified_logs::export_jsonl(&path, &events, overwrite)
+        } else {
+            unified_logs::export_txt(&path, &events, overwrite)
+        };
+        match result {
+            Ok(()) => self.push_output(format!(
+                "[logs] exported {} events to {}",
+                events.len(),
+                path.display()
+            )),
+            Err(error) => self.push_output(format!("[logs] export failed: {}", error)),
+        }
+    }
+
+    pub fn unified_logs_confirm_export(&mut self) {
+        if let Some((path, jsonl, filtered)) = self.pending_unified_export.take() {
+            self.write_unified_logs_export(&path, jsonl, filtered, true);
+        }
+    }
+
+    pub fn unified_logs_cancel_export(&mut self) {
+        self.pending_unified_export = None;
+    }
+
+    pub fn unified_logs_start_export(&mut self, jsonl: bool, filtered: bool) {
+        self.start_input(
+            if jsonl {
+                "JSONL export path:"
+            } else {
+                "TXT export path:"
+            },
+            if jsonl {
+                PendingAction::UnifiedLogsExportJsonl { filtered }
+            } else {
+                PendingAction::UnifiedLogsExportTxt { filtered }
+            },
+        );
     }
 
     pub fn toggle_logs_paused(&mut self) {
@@ -1564,6 +1799,14 @@ impl App {
             }
             PendingAction::LogFilter => {
                 self.log_filter = value.to_string();
+                None
+            }
+            PendingAction::UnifiedLogsExportTxt { filtered } => {
+                self.unified_logs_export(value, false, filtered);
+                None
+            }
+            PendingAction::UnifiedLogsExportJsonl { filtered } => {
+                self.unified_logs_export(value, true, filtered);
                 None
             }
             PendingAction::ContainerExecCustom { id, name } => {
