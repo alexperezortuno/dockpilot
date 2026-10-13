@@ -296,7 +296,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     app.set_task_status(format!("task {}: {}", id, message));
                 }
                 TaskEvent::Finished { id, lines } => {
-                    let (origin, _) = task_origins
+                    let (origin, description) = task_origins
                         .remove(&id)
                         .unwrap_or((TaskOrigin::User, String::new()));
                     app.finish_task(id, TaskState::Completed);
@@ -310,6 +310,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                     }
                     task_manager.complete(id);
+                    if origin == TaskOrigin::User
+                        && (description.starts_with("start container ")
+                            || description.starts_with("stop container ")
+                            || description.starts_with("restart container ")
+                            || description.starts_with("pause container ")
+                            || description.starts_with("unpause container "))
+                    {
+                        task_manager
+                            .spawn_with_origin(TaskRequest::ListContainers, TaskOrigin::Background);
+                    }
                 }
                 TaskEvent::Failed { id, message } => {
                     let (origin, description) = task_origins
@@ -362,6 +372,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     task_manager.complete(id);
                 }
                 TaskEvent::LogLine { line } => {
+                    app.push_unified_log_line(line.clone());
                     app.push_log_line(line);
                 }
                 TaskEvent::EventLine { line, alert } => {
@@ -748,6 +759,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         (KeyCode::Char('v'), _) => Some(TaskRequest::ListVolumes),
                         (KeyCode::Char('S'), _) => Some(TaskRequest::SystemInfo),
                         (KeyCode::Char('e'), _) => Some(TaskRequest::Events),
+                        (KeyCode::Char('g'), _) => {
+                            app.show_unified_logs();
+                            None
+                        }
                         (KeyCode::Char('u'), _) => Some(TaskRequest::DiskUsage { preview: false }),
                         (KeyCode::Char('K'), _) => Some(TaskRequest::DiskUsage { preview: true }),
                         (KeyCode::Char('f'), _) => {
