@@ -181,6 +181,9 @@ pub enum TaskEvent {
     LogLine {
         line: String,
     },
+    UnifiedLog {
+        event: crate::app::unified_logs::LogEvent,
+    },
     Dashboard {
         id: u64,
         data: DashboardData,
@@ -553,17 +556,49 @@ impl TaskManager {
                             .tail("200")
                             .build();
                         let mut stream = client.logs(&container_id, Some(options));
+                        let mut assemblers = [
+                            crate::app::unified_logs::LineAssembler::new(64 * 1024),
+                            crate::app::unified_logs::LineAssembler::new(64 * 1024),
+                        ];
                         while let Some(result) = stream.next().await {
                             match result {
                                 Ok(output) => {
-                                    for line in output.to_string().lines() {
-                                        if sender
-                                            .send(TaskEvent::LogLine {
-                                                line: line.to_string(),
+                                    let stream = match &output {
+                                        bollard::container::LogOutput::StdErr { .. } => {
+                                            crate::app::unified_logs::LogStream::Stderr
+                                        }
+                                        _ => crate::app::unified_logs::LogStream::Stdout,
+                                    };
+                                    let raw = match &output {
+                                        bollard::container::LogOutput::StdOut { message }
+                                        | bollard::container::LogOutput::StdErr { message }
+                                        | bollard::container::LogOutput::Console { message }
+                                        | bollard::container::LogOutput::StdIn { message } => {
+                                            message
+                                        }
+                                    };
+                                    let stream_index = usize::from(
+                                        stream == crate::app::unified_logs::LogStream::Stderr,
+                                    );
+                                    for line in assemblers[stream_index].push(raw) {
+                                        let (timestamp, message) =
+                                            crate::app::unified_logs::split_timestamp(&line);
+                                        let _ = sender
+                                            .send(TaskEvent::UnifiedLog {
+                                                event: crate::app::unified_logs::LogEvent {
+                                                    sequence: 0,
+                                                    container_id: container_id.clone(),
+                                                    container_name: container_id.clone(),
+                                                    compose_project: None,
+                                                    compose_service: None,
+                                                    timestamp,
+                                                    stream,
+                                                    message: message.to_string(),
+                                                    severity: crate::app::logs::classify(message),
+                                                },
                                             })
-                                            .await
-                                            .is_err()
-                                        {
+                                            .await;
+                                        if sender.send(TaskEvent::LogLine { line }).await.is_err() {
                                             return;
                                         }
                                     }
