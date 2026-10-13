@@ -4,8 +4,25 @@ use bollard::{
     exec::{CreateExecOptions, ResizeExecOptions, StartExecOptions, StartExecResults},
 };
 use futures_util::StreamExt;
-use std::pin::Pin;
-use tokio::{io::AsyncWrite, io::AsyncWriteExt, sync::mpsc, task::JoinHandle};
+use std::{
+    collections::VecDeque,
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
+use tokio::{
+    io::AsyncWrite,
+    io::AsyncWriteExt,
+    sync::{Mutex, Notify, mpsc},
+    task::JoinHandle,
+};
+
+/// Maximum pending stdin accepted from the UI. A full queue is reported, never dropped.
+pub const MAX_PENDING_INPUT: usize = 256 * 1024;
+const DETACH_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Lifecycle of an interactive exec session, mirrored by the TUI.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,6 +109,7 @@ pub fn split_exec_args(input: &str) -> Result<Vec<String>, String> {
 pub enum ExecEvent {
     Output(Vec<u8>),
     State(ExecState),
+    Detached,
 }
 
 #[derive(Debug)]
@@ -108,7 +126,33 @@ pub struct ExecSession {
     pub command_display: String,
     events: mpsc::Receiver<ExecEvent>,
     control: mpsc::Sender<ExecControl>,
+    input: Arc<Mutex<InputQueue>>,
+    input_ready: Arc<Notify>,
+    detach_requested: Arc<AtomicBool>,
     handle: JoinHandle<()>,
+}
+
+#[derive(Default)]
+struct InputQueue {
+    chunks: VecDeque<Vec<u8>>,
+    bytes: usize,
+}
+
+impl InputQueue {
+    fn push(&mut self, bytes: Vec<u8>) -> bool {
+        if bytes.is_empty() || self.bytes + bytes.len() > MAX_PENDING_INPUT {
+            return bytes.is_empty();
+        }
+        self.bytes += bytes.len();
+        self.chunks.push_back(bytes);
+        true
+    }
+
+    fn pop(&mut self) -> Option<Vec<u8>> {
+        let bytes = self.chunks.pop_front()?;
+        self.bytes -= bytes.len();
+        Some(bytes)
+    }
 }
 
 impl ExecSession {
@@ -121,7 +165,10 @@ impl ExecSession {
         cols: u16,
     ) -> Self {
         let (event_sender, events) = mpsc::channel(256);
-        let (control, control_rx) = mpsc::channel(256);
+        let (control, control_rx) = mpsc::channel(8);
+        let input = Arc::new(Mutex::new(InputQueue::default()));
+        let input_ready = Arc::new(Notify::new());
+        let detach_requested = Arc::new(AtomicBool::new(false));
         let command_display = command.display();
         let task_container = container_id.clone();
         let handle = tokio::spawn(run(
@@ -132,6 +179,9 @@ impl ExecSession {
             cols,
             event_sender,
             control_rx,
+            input.clone(),
+            input_ready.clone(),
+            detach_requested.clone(),
         ));
         Self {
             container_id,
@@ -139,6 +189,9 @@ impl ExecSession {
             command_display,
             events,
             control,
+            input,
+            input_ready,
+            detach_requested,
             handle,
         }
     }
@@ -147,15 +200,44 @@ impl ExecSession {
         self.events.try_recv().ok()
     }
 
-    /// Non-blocking send; a full channel drops input rather than stalling the UI.
+    /// Non-blocking input enqueue. A full bounded queue is reported to the caller.
     pub fn send(&self, control: ExecControl) -> bool {
-        self.control.try_send(control).is_ok()
+        match control {
+            ExecControl::Input(bytes) => {
+                let accepted = self
+                    .input
+                    .try_lock()
+                    .is_ok_and(|mut queue| queue.push(bytes));
+                if accepted {
+                    self.input_ready.notify_one();
+                }
+                accepted
+            }
+            ExecControl::Detach => {
+                self.detach_requested.store(true, Ordering::Release);
+                self.input_ready.notify_one();
+                true
+            }
+            control => self.control.try_send(control).is_ok(),
+        }
     }
 }
 
 impl Drop for ExecSession {
     fn drop(&mut self) {
-        self.handle.abort();
+        self.detach_requested.store(true, Ordering::Release);
+        self.input_ready.notify_one();
+        let handle = std::mem::replace(&mut self.handle, tokio::spawn(async {}));
+        tokio::spawn(async move {
+            let mut handle = handle;
+            if tokio::time::timeout(DETACH_TIMEOUT, &mut handle)
+                .await
+                .is_err()
+            {
+                handle.abort();
+                let _ = handle.await;
+            }
+        });
     }
 }
 
@@ -236,9 +318,27 @@ async fn drive(
     client: &Docker,
     events: &mpsc::Sender<ExecEvent>,
     control: &mut mpsc::Receiver<ExecControl>,
+    input: &Arc<Mutex<InputQueue>>,
+    input_ready: &Arc<Notify>,
+    detach_requested: &Arc<AtomicBool>,
 ) -> SessionEnd {
     loop {
         tokio::select! {
+            biased;
+            message = control.recv() => {
+                match message {
+                    Some(ExecControl::Detach) => return SessionEnd::Detached,
+                    Some(ExecControl::Resize { rows, cols }) => {
+                        if let Err(error) = client.resize_exec(&attached.exec_id, ResizeExecOptions {
+                            height: rows.max(1), width: cols.max(1),
+                        }).await {
+                            return SessionEnd::Failed(format!("resize failed: {}", error));
+                        }
+                    }
+                    Some(ExecControl::Input(_)) => unreachable!("input uses the bounded queue"),
+                    None => return SessionEnd::ViewDropped,
+                }
+            }
             chunk = attached.output.next() => {
                 match chunk {
                     Some(Ok(output)) => {
@@ -254,33 +354,28 @@ async fn drive(
                     None => return SessionEnd::StreamClosed,
                 }
             }
-            message = control.recv() => {
-                match message {
-                    Some(ExecControl::Input(bytes)) => {
-                        if let Err(error) = attached.input.write_all(&bytes).await {
-                            return SessionEnd::Failed(format!("stdin write failed: {}", error));
-                        }
-                        let _ = attached.input.flush().await;
+            _ = input_ready.notified() => {
+                if detach_requested.load(Ordering::Acquire) {
+                    return SessionEnd::Detached;
+                }
+                let bytes = input.lock().await.pop();
+                if let Some(bytes) = bytes {
+                    if let Err(error) = attached.input.write_all(&bytes).await {
+                        return SessionEnd::Failed(format!("stdin write failed: {}", error));
                     }
-                    Some(ExecControl::Resize { rows, cols }) => {
-                        let _ = client
-                            .resize_exec(
-                                &attached.exec_id,
-                                ResizeExecOptions {
-                                    height: rows.max(1),
-                                    width: cols.max(1),
-                                },
-                            )
-                            .await;
+                    if let Err(error) = attached.input.flush().await {
+                        return SessionEnd::Failed(format!("stdin flush failed: {}", error));
                     }
-                    Some(ExecControl::Detach) => return SessionEnd::Detached,
-                    None => return SessionEnd::ViewDropped,
+                    if !input.lock().await.chunks.is_empty() {
+                        input_ready.notify_one();
+                    }
                 }
             }
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run(
     client: Docker,
     container_id: String,
@@ -289,6 +384,9 @@ async fn run(
     cols: u16,
     events: mpsc::Sender<ExecEvent>,
     mut control: mpsc::Receiver<ExecControl>,
+    input: Arc<Mutex<InputQueue>>,
+    input_ready: Arc<Notify>,
+    detach_requested: Arc<AtomicBool>,
 ) {
     macro_rules! send_state {
         ($state:expr) => {
@@ -301,15 +399,53 @@ async fn run(
     send_state!(ExecState::Connecting);
     let mut attempt = command;
     loop {
-        match attach(&client, &container_id, &attempt, rows, cols).await {
+        let attach_result = {
+            let attach_command = attempt.clone();
+            let attaching = attach(&client, &container_id, &attach_command, rows, cols);
+            tokio::pin!(attaching);
+            loop {
+                tokio::select! {
+                    biased;
+                    message = control.recv() => match message {
+                        Some(ExecControl::Detach) => {
+                            send_state!(ExecState::Detaching);
+                            let _ = events.send(ExecEvent::Detached).await;
+                            return;
+                        }
+                        Some(ExecControl::Resize { .. }) => continue,
+                        Some(ExecControl::Input(_)) => unreachable!("input uses the bounded queue"),
+                        None => return,
+                    },
+                    _ = input_ready.notified() => {
+                        if detach_requested.load(Ordering::Acquire) {
+                            send_state!(ExecState::Detaching);
+                            let _ = events.send(ExecEvent::Detached).await;
+                            return;
+                        }
+                    }
+                    result = &mut attaching => break result,
+                }
+            }
+        };
+        match attach_result {
             Ok(attached) => {
                 send_state!(ExecState::Running);
                 let exec_id = attached.exec_id.clone();
-                match drive(attached, &client, &events, &mut control).await {
+                match drive(
+                    attached,
+                    &client,
+                    &events,
+                    &mut control,
+                    &input,
+                    &input_ready,
+                    &detach_requested,
+                )
+                .await
+                {
                     SessionEnd::Detached => {
                         send_state!(ExecState::Detaching);
-                        // Dropping the attached streams closes the connection;
-                        // the remote process keeps running.
+                        // Dropping the attach stream detaches without signaling the remote PTY.
+                        let _ = events.send(ExecEvent::Detached).await;
                     }
                     SessionEnd::StreamClosed => {
                         let exit_code = client
@@ -341,7 +477,11 @@ async fn run(
 
 #[cfg(test)]
 mod tests {
-    use super::{ExecCommand, ExecState, is_missing_program, split_exec_args};
+    use std::time::Duration;
+
+    use super::{
+        ExecCommand, ExecState, InputQueue, MAX_PENDING_INPUT, is_missing_program, split_exec_args,
+    };
 
     #[test]
     fn custom_commands_split_without_a_shell() {
@@ -396,5 +536,59 @@ mod tests {
             ExecState::Finished { exit_code: Some(1) }.label(),
             "finished (exit code 1)"
         );
+    }
+
+    #[test]
+    fn input_queue_preserves_order_and_has_a_byte_bound() {
+        let mut queue = InputQueue::default();
+        assert!(queue.push(b"first".to_vec()));
+        assert!(queue.push(b"second".to_vec()));
+        assert_eq!(queue.pop().unwrap(), b"first");
+        assert_eq!(queue.pop().unwrap(), b"second");
+        assert!(!queue.push(vec![b'x'; MAX_PENDING_INPUT + 1]));
+    }
+
+    #[test]
+    fn saturated_input_is_rejected_without_partial_enqueue() {
+        let mut queue = InputQueue::default();
+        assert!(queue.push(vec![b'a'; MAX_PENDING_INPUT]));
+        assert!(!queue.push(b"overflow".to_vec()));
+        assert_eq!(queue.pop().unwrap().len(), MAX_PENDING_INPUT);
+        assert!(queue.pop().is_none());
+    }
+
+    #[tokio::test]
+    async fn detach_during_connection_is_confirmed_without_waiting_for_attach() {
+        let client = bollard::Docker::connect_with_http(
+            "http://127.0.0.1:9",
+            1,
+            bollard::API_DEFAULT_VERSION,
+        )
+        .expect("client with unreachable endpoint");
+        let mut session = super::ExecSession::start(
+            client,
+            "container-id".to_string(),
+            "name".to_string(),
+            ExecCommand::Sh,
+            24,
+            80,
+        );
+        assert!(session.send(super::ExecControl::Detach));
+        let mut saw_detaching = false;
+        let mut saw_detached = false;
+        for _ in 0..100 {
+            while let Some(event) = session.try_next_event() {
+                match event {
+                    super::ExecEvent::State(ExecState::Detaching) => saw_detaching = true,
+                    super::ExecEvent::Detached => saw_detached = true,
+                    _ => {}
+                }
+            }
+            if saw_detaching && saw_detached {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(saw_detaching && saw_detached);
     }
 }
