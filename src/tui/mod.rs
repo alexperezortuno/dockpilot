@@ -57,6 +57,7 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
     let tab_titles = [
         "Dashboard",
         "Container",
+        "Logs",
         "Image",
         "Network",
         "Volume",
@@ -67,12 +68,13 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
     let selected_tab = match app.current_tab {
         Tab::Dashboard => 0,
         Tab::Container => 1,
-        Tab::Image => 2,
-        Tab::Network => 3,
-        Tab::Volume => 4,
-        Tab::Project => 5,
-        Tab::System => 6,
-        Tab::Help => 7,
+        Tab::UnifiedLogs => 2,
+        Tab::Image => 3,
+        Tab::Network => 4,
+        Tab::Volume => 5,
+        Tab::Project => 6,
+        Tab::System => 7,
+        Tab::Help => 8,
     };
 
     let tabs = Tabs::new(tab_titles)
@@ -99,6 +101,7 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
 
     match app.current_tab {
         Tab::Dashboard => screens::dashboard::draw(f, app, layout.content),
+        Tab::UnifiedLogs => screens::unified_logs::draw(f, app, layout.content),
         Tab::Container | Tab::Image | Tab::Network | Tab::Volume => {
             screens::resources::draw(f, app, layout.content, colors)
         }
