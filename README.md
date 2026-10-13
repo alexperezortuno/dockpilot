@@ -78,7 +78,12 @@ Completed:
   - refresh incidents are independent per task context, command-palette `j`/`k` input is preserved, and task durations are measured from start to finish.
 - UX-006 local system information tab:
   - asynchronous local host collection for OS, kernel, CPU, load, memory, swap, disks, networks, and Dockpilot runtime data.
-  - local system data remains available when Docker is disconnected and never follows a remote Docker context.
+   - local system data remains available when Docker is disconnected and never follows a remote Docker context.
+- UX-008 unified logs:
+  - dedicated Logs tab with a bounded global buffer and normalized container/stream metadata.
+  - combined container, Compose service, severity, time, and text filtering primitives plus incremental search.
+  - TXT/JSONL export preserves origin and timestamps; exports warn users that source logs may contain secrets.
+  - global ordering across streams is approximate and does not guarantee causal ordering.
 
 The current TUI provides dashboard, container, image, network, volume, project, system, and help tabs. The System tab reports local host identity, CPU, memory, swap, disks, network interfaces, and Dockpilot runtime details. It never reports remote Docker hosts or secrets. Legacy Docker Machine support was removed; use Docker contexts for local, TCP, or SSH engines.
 
@@ -258,6 +263,7 @@ When the container table has focus, `Enter` inspects the selected container. Lif
 
 - **Dashboard**: Docker Engine version, container health counts, and selected-container CPU/memory statistics.
 - **Container**: start/stop named containers, stop all containers, list containers, logs, create/remove, inspect process state, pause/unpause, update, wait, and interactive Exec.
+- **Logs**: normalized bounded view of streamed container logs, with approximate cross-container ordering and Compose origin metadata.
 - **Image**: list images through Bollard, build, rebuild, remove, push, pull, save/load, and history with task progress.
 - **Project**: set the project folder, run Compose up/down/config, and start with a selected Compose profile.
 - **Network**: list networks through Bollard, create, and remove networks.
