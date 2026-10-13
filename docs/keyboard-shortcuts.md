@@ -13,6 +13,10 @@
 | `/` | Incrementally filter the current resource |
 | `r` / `R` | Refresh / toggle auto-refresh |
 | `S` | Refresh local system information |
+| `g` | Open Unified Logs |
+| `p` | Pause/resume log display |
+| `L` | Cycle minimum log severity |
+| `T` | Toggle Docker timestamps for the next request |
 | `x` | Cancel the active task |
 | `o` / `D` / `C` | Toggle output / details / compact layout |
 | `?` | Open help |
@@ -31,6 +35,8 @@ Open `Exec into container` from the `a` context menu or command palette on a run
 | `Esc` / `Enter` after exit | Close the finished session |
 
 In the command palette, arrows navigate and `j`/`k` are normal text input. Destructive actions always require confirmation.
+
+The **Logs** tab keeps a bounded in-memory history. `/` searches incrementally without changing resource search, and `p` pauses display without stopping acquisition. Cross-container ordering is approximate and does not guarantee causal ordering. Exported TXT/JSONL files may contain secrets already present in application logs. Export is treated as a local read-only operation, so it remains available in read-only Docker contexts; overwrites still require explicit confirmation.
 
 Exec uses the standard crossterm/xterm key protocol. Terminals using proprietary enhanced-key protocols, kitty graphics, or sixel output may have reduced compatibility.
 
