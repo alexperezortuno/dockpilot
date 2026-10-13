@@ -372,8 +372,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     task_manager.complete(id);
                 }
                 TaskEvent::LogLine { line } => {
-                    app.push_unified_log_line(line.clone());
                     app.push_log_line(line);
+                }
+                TaskEvent::UnifiedLog { event } => {
+                    app.push_unified_log_event(event);
                 }
                 TaskEvent::EventLine { line, alert } => {
                     app.set_task_status("events");
@@ -568,6 +570,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             app.mark_dirty();
             if app.exec_active() {
                 handle_exec_key(&mut app, code, modifiers);
+            } else if app.pending_unified_export.is_some() {
+                match code {
+                    KeyCode::Char('y') | KeyCode::Char('Y') => app.unified_logs_confirm_export(),
+                    KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                        app.unified_logs_cancel_export()
+                    }
+                    _ => {}
+                }
             } else if pending_confirmation.is_some() {
                 match code {
                     KeyCode::Char('y') | KeyCode::Char('Y') => {
@@ -651,6 +661,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             KeyCode::Char(c) => {
                                 app.search_push(c);
+                                None
+                            }
+                            _ => None,
+                        },
+                        Overlay::UnifiedLogSearch => match code {
+                            KeyCode::Enter => {
+                                app.unified_log_view.search_active = true;
+                                app.overlay = Overlay::None;
+                                None
+                            }
+                            KeyCode::Esc => {
+                                app.unified_logs_close_search();
+                                app.overlay = Overlay::None;
+                                None
+                            }
+                            KeyCode::Backspace => {
+                                app.unified_logs_search_backspace();
+                                None
+                            }
+                            KeyCode::Char(c) => {
+                                app.unified_logs_search_push(c);
+                                None
+                            }
+                            _ => None,
+                        },
+                        Overlay::UnifiedLogFilter => match code {
+                            KeyCode::Enter => {
+                                app.unified_logs_filter_confirm();
+                                app.overlay = Overlay::None;
+                                None
+                            }
+                            KeyCode::Esc => {
+                                app.overlay = Overlay::None;
+                                None
+                            }
+                            KeyCode::Backspace => {
+                                app.unified_logs_filter_backspace();
+                                None
+                            }
+                            KeyCode::Char(c) => {
+                                app.unified_logs_filter_push(c);
                                 None
                             }
                             _ => None,
@@ -755,17 +806,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         (KeyCode::Char('d'), _) => Some(app.dashboard_request()),
                         (KeyCode::Char('i'), _) => Some(TaskRequest::ListImages),
-                        (KeyCode::Char('n'), _) => Some(TaskRequest::ListNetworks),
+                        (KeyCode::Char('n'), _) if !matches!(app.current_tab, Tab::UnifiedLogs) => {
+                            Some(TaskRequest::ListNetworks)
+                        }
                         (KeyCode::Char('v'), _) => Some(TaskRequest::ListVolumes),
                         (KeyCode::Char('S'), _) => Some(TaskRequest::SystemInfo),
                         (KeyCode::Char('e'), _) => Some(TaskRequest::Events),
-                        (KeyCode::Char('g'), _) => {
+                        (KeyCode::Char('g'), _) if !matches!(app.current_tab, Tab::UnifiedLogs) => {
                             app.show_unified_logs();
-                            None
+                            app.selected_container_id()
+                                .map(|id| TaskRequest::ContainerLogs {
+                                    id,
+                                    follow: true,
+                                    timestamps: true,
+                                })
                         }
                         (KeyCode::Char('u'), _) => Some(TaskRequest::DiskUsage { preview: false }),
                         (KeyCode::Char('K'), _) => Some(TaskRequest::DiskUsage { preview: true }),
-                        (KeyCode::Char('f'), _) => {
+                        (KeyCode::Char('f'), _) if !matches!(app.current_tab, Tab::UnifiedLogs) => {
                             app.start_filter();
                             None
                         }
@@ -782,11 +840,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             None
                         }
                         (KeyCode::Char('p'), _) => {
-                            app.toggle_logs_paused();
+                            if matches!(app.current_tab, Tab::UnifiedLogs) {
+                                app.unified_logs_toggle_pause();
+                            } else {
+                                app.toggle_logs_paused();
+                            }
+                            None
+                        }
+                        (KeyCode::Char('F'), _) if matches!(app.current_tab, Tab::UnifiedLogs) => {
+                            app.unified_logs_toggle_follow();
+                            None
+                        }
+                        (KeyCode::Char('E'), _) if matches!(app.current_tab, Tab::UnifiedLogs) => {
+                            app.unified_logs_start_export(false, false);
+                            None
+                        }
+                        (KeyCode::Char('J'), _) if matches!(app.current_tab, Tab::UnifiedLogs) => {
+                            app.unified_logs_start_export(true, true);
+                            None
+                        }
+                        (KeyCode::Char('f'), _) if matches!(app.current_tab, Tab::UnifiedLogs) => {
+                            app.unified_logs_cycle_filter();
+                            None
+                        }
+                        (KeyCode::Char('n'), _) if matches!(app.current_tab, Tab::UnifiedLogs) => {
+                            app.unified_logs_next_match(false);
+                            None
+                        }
+                        (KeyCode::Char('N'), _) if matches!(app.current_tab, Tab::UnifiedLogs) => {
+                            app.unified_logs_next_match(true);
                             None
                         }
                         (KeyCode::Char('/'), _) => {
-                            if !app.log_lines.is_empty() {
+                            if matches!(app.current_tab, Tab::UnifiedLogs) {
+                                app.unified_logs_start_search();
+                            } else if !app.log_lines.is_empty() {
                                 app.start_log_filter();
                             } else if matches!(
                                 app.current_tab,
@@ -819,19 +907,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             None
                         }
                         (KeyCode::Up, _) => {
-                            app.previous();
+                            if matches!(app.current_tab, Tab::UnifiedLogs) {
+                                app.unified_logs_move(-1);
+                            } else {
+                                app.previous();
+                            }
                             None
                         }
                         (KeyCode::Down, _) => {
-                            app.next();
+                            if matches!(app.current_tab, Tab::UnifiedLogs) {
+                                app.unified_logs_move(1);
+                            } else {
+                                app.next();
+                            }
                             None
                         }
                         (KeyCode::Char('j'), _) => {
-                            app.next();
+                            if matches!(app.current_tab, Tab::UnifiedLogs) {
+                                app.unified_logs_move(1);
+                            } else {
+                                app.next();
+                            }
                             None
                         }
                         (KeyCode::Char('k'), _) => {
-                            app.previous();
+                            if matches!(app.current_tab, Tab::UnifiedLogs) {
+                                app.unified_logs_move(-1);
+                            } else {
+                                app.previous();
+                            }
+                            None
+                        }
+                        (KeyCode::Char('g'), _) if matches!(app.current_tab, Tab::UnifiedLogs) => {
+                            app.unified_logs_home();
+                            None
+                        }
+                        (KeyCode::Char('G'), _) if matches!(app.current_tab, Tab::UnifiedLogs) => {
+                            app.unified_logs_end();
                             None
                         }
                         (KeyCode::Char('?'), _) => {
