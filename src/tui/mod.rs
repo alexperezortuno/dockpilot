@@ -50,7 +50,13 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
     }
     let layout = areas(
         f.area(),
-        app.input_mode || matches!(app.overlay, crate::app::Overlay::Search(_)),
+        app.input_mode
+            || matches!(
+                app.overlay,
+                crate::app::Overlay::Search(_)
+                    | crate::app::Overlay::UnifiedLogSearch
+                    | crate::app::Overlay::UnifiedLogFilter
+            ),
         app.show_output,
         app.compact_layout,
     );
@@ -119,8 +125,12 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
     if app.show_output {
         widgets::output::draw(f, app, layout.output);
     }
-    if matches!(app.overlay, crate::app::Overlay::Search(_))
-        && let Some(area) = layout.input
+    if matches!(
+        app.overlay,
+        crate::app::Overlay::Search(_)
+            | crate::app::Overlay::UnifiedLogSearch
+            | crate::app::Overlay::UnifiedLogFilter
+    ) && let Some(area) = layout.input
     {
         widgets::search_bar::draw(f, app, area);
     }
@@ -158,6 +168,7 @@ mod tests {
             for tab in [
                 Tab::Dashboard,
                 Tab::Container,
+                Tab::UnifiedLogs,
                 Tab::Image,
                 Tab::Network,
                 Tab::Volume,
