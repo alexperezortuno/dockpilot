@@ -3,7 +3,10 @@ use bollard::{Docker, container::LogOutput, query_parameters::LogsOptionsBuilder
 use futures_util::StreamExt;
 use serde::Serialize;
 use std::{collections::VecDeque, io, path::Path};
-use tokio::sync::{mpsc, watch};
+use tokio::{
+    sync::{mpsc, watch},
+    task::JoinSet,
+};
 
 pub const DEFAULT_CAPACITY: usize = 10_000;
 
@@ -29,6 +32,7 @@ pub struct LogEvent {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LogFilter {
     pub container: Option<String>,
+    pub compose_project: Option<String>,
     pub compose_service: Option<String>,
     pub minimum_severity: Option<LogLevel>,
     pub since: Option<String>,
@@ -46,6 +50,10 @@ impl LogFilter {
             })
         };
         contains(&event.container_name, &self.container)
+            && contains(
+                event.compose_project.as_deref().unwrap_or_default(),
+                &self.compose_project,
+            )
             && contains(
                 event.compose_service.as_deref().unwrap_or_default(),
                 &self.compose_service,
@@ -74,6 +82,8 @@ pub struct LogBuffer {
     capacity: usize,
     next_sequence: u64,
     events: VecDeque<LogEvent>,
+    generation: u64,
+    dropped: u64,
 }
 
 impl LogBuffer {
@@ -82,6 +92,8 @@ impl LogBuffer {
             capacity: capacity.max(1),
             next_sequence: 0,
             events: VecDeque::new(),
+            generation: 0,
+            dropped: 0,
         }
     }
 
@@ -90,8 +102,10 @@ impl LogBuffer {
         self.next_sequence = self.next_sequence.wrapping_add(1);
         if self.events.len() == self.capacity {
             self.events.pop_front();
+            self.dropped = self.dropped.saturating_add(1);
         }
         self.events.push_back(event);
+        self.generation = self.generation.wrapping_add(1);
     }
 
     pub fn len(&self) -> usize {
@@ -102,6 +116,34 @@ impl LogBuffer {
     }
     pub fn all(&self) -> impl Iterator<Item = &LogEvent> {
         self.events.iter()
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub fn dropped(&self) -> u64 {
+        self.dropped
+    }
+
+    pub fn get(&self, sequence: u64) -> Option<&LogEvent> {
+        self.events.iter().find(|event| event.sequence == sequence)
+    }
+
+    pub fn visible_sequences(&self, filter: &LogFilter) -> Vec<u64> {
+        let mut visible = self
+            .events
+            .iter()
+            .filter(|event| filter.matches(event))
+            .collect::<Vec<_>>();
+        visible.sort_by(|left, right| {
+            left.timestamp
+                .is_none()
+                .cmp(&right.timestamp.is_none())
+                .then(left.timestamp.as_deref().cmp(&right.timestamp.as_deref()))
+                .then(left.sequence.cmp(&right.sequence))
+        });
+        visible.into_iter().map(|event| event.sequence).collect()
     }
 
     pub fn visible(&self, filter: &LogFilter) -> Vec<&LogEvent> {
@@ -187,6 +229,187 @@ pub struct LogSource {
     pub compose_service: Option<String>,
 }
 
+#[derive(Debug)]
+pub struct LineAssembler {
+    pending: Vec<u8>,
+    max_line_bytes: usize,
+}
+
+impl LineAssembler {
+    pub fn new(max_line_bytes: usize) -> Self {
+        Self {
+            pending: Vec::new(),
+            max_line_bytes: max_line_bytes.max(1),
+        }
+    }
+
+    pub fn push(&mut self, bytes: &[u8]) -> Vec<String> {
+        self.pending.extend_from_slice(bytes);
+        let mut lines = Vec::new();
+        while let Some(position) = self.pending.iter().position(|byte| *byte == b'\n') {
+            let line = self.pending.drain(..=position).collect::<Vec<_>>();
+            lines.push(decode_line(
+                &line[..line.len().saturating_sub(1)],
+                self.max_line_bytes,
+            ));
+        }
+        if self.pending.len() > self.max_line_bytes {
+            let overflow = self.pending.split_off(self.max_line_bytes);
+            let line = std::mem::replace(&mut self.pending, overflow);
+            lines.push(decode_line(&line, self.max_line_bytes));
+        }
+        lines
+    }
+
+    pub fn finish(&mut self) -> Option<String> {
+        (!self.pending.is_empty()).then(|| {
+            let line = std::mem::take(&mut self.pending);
+            decode_line(&line, self.max_line_bytes)
+        })
+    }
+}
+
+fn decode_line(bytes: &[u8], max_line_bytes: usize) -> String {
+    String::from_utf8_lossy(&bytes[..bytes.len().min(max_line_bytes)])
+        .trim_end_matches('\r')
+        .to_string()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterField {
+    Container,
+    ComposeProject,
+    ComposeService,
+    Severity,
+    Since,
+    Until,
+    Text,
+}
+
+impl FilterField {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Container => "container",
+            Self::ComposeProject => "project",
+            Self::ComposeService => "service",
+            Self::Severity => "severity",
+            Self::Since => "since",
+            Self::Until => "until",
+            Self::Text => "text",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Container => Self::ComposeProject,
+            Self::ComposeProject => Self::ComposeService,
+            Self::ComposeService => Self::Severity,
+            Self::Severity => Self::Since,
+            Self::Since => Self::Until,
+            Self::Until => Self::Text,
+            Self::Text => Self::Container,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LogViewState {
+    pub filter: LogFilter,
+    pub filter_field: FilterField,
+    pub filter_input: String,
+    pub filter_editing: bool,
+    pub search_query: String,
+    pub search_hits: Vec<u64>,
+    pub search_cursor: usize,
+    pub search_active: bool,
+    pub follow: bool,
+    pub paused: bool,
+    pub scroll: usize,
+    pub selected_sequence: Option<u64>,
+    pub cached_sequences: Vec<u64>,
+    cached_generation: u64,
+}
+
+impl Default for LogViewState {
+    fn default() -> Self {
+        Self {
+            filter: LogFilter::default(),
+            filter_field: FilterField::Container,
+            filter_input: String::new(),
+            filter_editing: false,
+            search_query: String::new(),
+            search_hits: Vec::new(),
+            search_cursor: 0,
+            search_active: false,
+            follow: true,
+            paused: false,
+            scroll: 0,
+            selected_sequence: None,
+            cached_sequences: Vec::new(),
+            cached_generation: u64::MAX,
+        }
+    }
+}
+
+impl LogViewState {
+    pub fn refresh_cache(&mut self, buffer: &LogBuffer) {
+        if self.cached_generation == buffer.generation() {
+            return;
+        }
+        self.cached_sequences = buffer.visible_sequences(&self.filter);
+        self.cached_generation = buffer.generation();
+        self.search_hits =
+            search_indices_by_sequence(buffer, &self.cached_sequences, &self.search_query);
+        self.search_cursor = self
+            .search_cursor
+            .min(self.search_hits.len().saturating_sub(1));
+        self.selected_sequence = self
+            .selected_sequence
+            .filter(|sequence| self.cached_sequences.contains(sequence))
+            .or_else(|| self.cached_sequences.last().copied());
+        self.scroll = self
+            .scroll
+            .min(self.cached_sequences.len().saturating_sub(1));
+    }
+
+    pub fn set_filter(&mut self, filter: LogFilter) {
+        self.filter = filter;
+        self.cached_generation = u64::MAX;
+    }
+
+    pub fn set_search(&mut self, query: String, buffer: &LogBuffer) {
+        self.search_query = query;
+        self.search_active = true;
+        self.refresh_cache(buffer);
+        self.search_hits =
+            search_indices_by_sequence(buffer, &self.cached_sequences, &self.search_query);
+        self.search_cursor = 0;
+        if let Some(sequence) = self.search_hits.first() {
+            self.selected_sequence = Some(*sequence);
+        }
+    }
+}
+
+pub fn search_indices_by_sequence(buffer: &LogBuffer, sequences: &[u64], query: &str) -> Vec<u64> {
+    let query = query.to_ascii_lowercase();
+    sequences
+        .iter()
+        .copied()
+        .filter(|sequence| {
+            buffer.get(*sequence).is_some_and(|event| {
+                event.message.to_ascii_lowercase().contains(&query)
+                    || event.container_name.to_ascii_lowercase().contains(&query)
+                    || event
+                        .compose_service
+                        .as_deref()
+                        .unwrap_or_default()
+                        .to_ascii_lowercase()
+                        .contains(&query)
+            })
+        })
+        .collect()
+}
+
 /// Streams each container fairly through one bounded receiver. Docker ordering across
 /// containers is approximate and does not establish causal ordering.
 pub async fn stream_sources(
@@ -196,12 +419,13 @@ pub async fn stream_sources(
     sender: mpsc::Sender<LogEvent>,
     mut cancelled: watch::Receiver<bool>,
 ) {
-    let mut tasks = Vec::new();
+    let mut tasks = JoinSet::new();
     for source in sources {
         let client = client.clone();
         let sender = sender.clone();
         let mut cancelled = cancelled.clone();
-        tasks.push(tokio::spawn(async move {
+        tasks.spawn(async move {
+            let mut assemblers = [LineAssembler::new(64 * 1024), LineAssembler::new(64 * 1024)];
             let options = LogsOptionsBuilder::new()
                 .follow(follow)
                 .stdout(true)
@@ -216,7 +440,22 @@ pub async fn stream_sources(
             } {
                 let output = match result {
                     Ok(output) => output,
-                    Err(_) => return,
+                    Err(error) => {
+                        let _ = sender
+                            .send(LogEvent {
+                                sequence: 0,
+                                container_id: source.id.clone(),
+                                container_name: source.name.clone(),
+                                compose_project: source.compose_project.clone(),
+                                compose_service: source.compose_service.clone(),
+                                timestamp: None,
+                                stream: LogStream::Stderr,
+                                message: format!("[stream error] {error}"),
+                                severity: LogLevel::Error,
+                            })
+                            .await;
+                        return;
+                    }
                 };
                 let (stream_kind, raw) = match output {
                     LogOutput::StdOut { message } => (LogStream::Stdout, message),
@@ -224,8 +463,9 @@ pub async fn stream_sources(
                     LogOutput::Console { message } => (LogStream::Stdout, message),
                     LogOutput::StdIn { message } => (LogStream::Stdout, message),
                 };
-                for line in String::from_utf8_lossy(&raw).lines() {
-                    let (timestamp, message) = split_timestamp(line);
+                let stream_index = usize::from(stream_kind == LogStream::Stderr);
+                for line in assemblers[stream_index].push(&raw) {
+                    let (timestamp, message) = split_timestamp(&line);
                     let event = LogEvent {
                         sequence: 0,
                         container_id: source.id.clone(),
@@ -242,15 +482,45 @@ pub async fn stream_sources(
                     }
                 }
             }
-        }));
+            for (index, assembler) in assemblers.iter_mut().enumerate() {
+                if let Some(line) = assembler.finish() {
+                    let (timestamp, message) = split_timestamp(&line);
+                    let _ = sender
+                        .send(LogEvent {
+                            sequence: 0,
+                            container_id: source.id.clone(),
+                            container_name: source.name.clone(),
+                            compose_project: source.compose_project.clone(),
+                            compose_service: source.compose_service.clone(),
+                            timestamp,
+                            stream: if index == 0 {
+                                LogStream::Stdout
+                            } else {
+                                LogStream::Stderr
+                            },
+                            severity: classify(message),
+                            message: message.to_string(),
+                        })
+                        .await;
+                }
+            }
+        });
     }
-    let _ = cancelled.changed().await;
-    for task in tasks {
-        task.abort();
+    loop {
+        tokio::select! {
+            _ = cancelled.changed() => {
+                tasks.abort_all();
+                while tasks.join_next().await.is_some() {}
+                break;
+            }
+            result = tasks.join_next() => {
+                if result.is_none() { break; }
+            }
+        }
     }
 }
 
-fn split_timestamp(line: &str) -> (Option<String>, &str) {
+pub fn split_timestamp(line: &str) -> (Option<String>, &str) {
     let mut parts = line.splitn(2, ' ');
     let first = parts.next().unwrap_or_default();
     let rest = parts.next();
@@ -358,5 +628,44 @@ mod tests {
         assert!(export_jsonl(&path, &events, false).is_err());
         export_jsonl(&path, &events, true).unwrap();
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn assembler_reconstructs_fragmented_lines_and_utf8() {
+        let mut assembler = LineAssembler::new(32);
+        assert!(assembler.push("hé".as_bytes()).is_empty());
+        assert_eq!(assembler.push("llo\nnext".as_bytes()), vec!["héllo"]);
+        assert_eq!(assembler.finish().as_deref(), Some("next"));
+    }
+
+    #[test]
+    fn assembler_bounds_a_line_without_dropping_the_following_fragment() {
+        let mut assembler = LineAssembler::new(4);
+        assert_eq!(assembler.push(b"12345678"), vec!["1234"]);
+        assert_eq!(assembler.push(b"\n"), vec!["5678"]);
+    }
+
+    #[test]
+    fn view_cache_handles_the_full_buffer_without_rendering_every_event() {
+        let mut buffer = LogBuffer::new(DEFAULT_CAPACITY);
+        for index in 0..DEFAULT_CAPACITY {
+            buffer.push(event("api", None, &format!("line {index}")));
+        }
+        let mut view = LogViewState::default();
+        view.refresh_cache(&buffer);
+        assert_eq!(view.cached_sequences.len(), DEFAULT_CAPACITY);
+        assert_eq!(view.cached_sequences.last(), Some(&9_999));
+        view.selected_sequence = Some(9_990);
+        view.set_filter(LogFilter {
+            text: Some("line 99".into()),
+            ..Default::default()
+        });
+        view.refresh_cache(&buffer);
+        assert!(view.cached_sequences.len() < DEFAULT_CAPACITY);
+        assert!(
+            view.cached_sequences
+                .iter()
+                .all(|sequence| { buffer.get(*sequence).unwrap().message.contains("line 99") })
+        );
     }
 }
