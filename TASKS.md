@@ -59,6 +59,7 @@
   - Command palette navigation uses arrows; `j` and `k` remain text input, and task duration uses `finished - started`.
    - Added dirty-render, task duration, independent refresh incident, palette input, identity selection, and terminal-size coverage.
 - [x] UX-007: Interactive container Exec with Bollard PTY sessions, terminal emulation, resize, detach, bounded scrollback, policy enforcement, cleanup, tests, and documentation.
+- [x] UX-007.1: Harden interactive Exec input backpressure, reliable detach, session lifecycle cleanup, context binding, and terminal recovery coverage.
 
 ## First agent assignment
 Implement DS-001 only. Inspect the repository, run baseline checks where available, and report shell interpolation, blocking subprocess calls, hardcoded parameters, broken output scrolling and Compose working-directory behavior. Do not refactor before reporting findings.

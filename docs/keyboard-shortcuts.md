@@ -26,10 +26,12 @@ Open `Exec into container` from the `a` context menu or command palette on a run
 | --- | --- |
 | Characters, Enter, Backspace, Tab, arrows | Send input to the container PTY |
 | `Ctrl+C` | Send interrupt to the process inside the container |
-| `Ctrl+]` | Detach and return to Dockpilot; does not terminate the remote process |
+| `Ctrl+]` | Request detach; Dockpilot returns only after the local PTY detach is confirmed, without terminating the remote process |
 | `Shift+PageUp` / `Shift+PageDown` | Move through bounded terminal scrollback |
 | `Esc` / `Enter` after exit | Close the finished session |
 
 In the command palette, arrows navigate and `j`/`k` are normal text input. Destructive actions always require confirmation.
 
 Exec uses the standard crossterm/xterm key protocol. Terminals using proprietary enhanced-key protocols, kitty graphics, or sixel output may have reduced compatibility.
+
+Interactive input is queued in a bounded 256 KiB FIFO. If a paste exceeds the available queue capacity, it is rejected with a warning rather than silently dropping bytes.

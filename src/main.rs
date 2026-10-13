@@ -154,14 +154,15 @@ fn dispatch_request(
 fn handle_exec_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
     enum After {
         None,
-        Detached(String),
+        InputRejected,
         Closed(String),
     }
     let mut after = After::None;
     if let Some(exec) = app.exec.as_mut() {
         if modifiers.contains(KeyModifiers::CONTROL) && code == KeyCode::Char(']') {
-            exec.detach();
-            after = After::Detached(exec.session.container_name.clone());
+            if !exec.detach() {
+                after = After::InputRejected;
+            }
         } else if exec.state.is_closed() {
             if matches!(code, KeyCode::Esc | KeyCode::Enter) {
                 after = After::Closed(exec.state.label());
@@ -171,21 +172,22 @@ fn handle_exec_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
                 (KeyCode::PageUp, m) if m.contains(KeyModifiers::SHIFT) => exec.scroll(10),
                 (KeyCode::PageDown, m) if m.contains(KeyModifiers::SHIFT) => exec.scroll(-10),
                 _ => {
-                    if let Some(bytes) = tui::exec_keys::encode_key(code, modifiers) {
-                        exec.send_input(bytes);
+                    if let Some(bytes) = tui::exec_keys::encode_key(code, modifiers)
+                        && !exec.send_input(bytes)
+                    {
+                        after = After::InputRejected;
                     }
                 }
             }
         }
     }
     match after {
-        After::Detached(name) => {
-            app.close_exec();
-            app.push_output(format!(
-                "[exec] detached from {} (remote process keeps running)",
-                name
-            ));
-            app.notify(NotificationKind::Info, "Exec session detached", false);
+        After::InputRejected => {
+            app.notify(
+                NotificationKind::Warning,
+                "Exec input or detach request could not be queued",
+                false,
+            );
         }
         After::Closed(label) => {
             app.close_exec();
@@ -247,13 +249,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while !should_quit {
         app.tick();
         // Drain interactive exec traffic outside the task manager.
-        let (exec_changed, exec_closed) = if let Some(exec) = app.exec.as_mut() {
+        let (exec_changed, exec_closed, exec_detached) = if let Some(exec) = app.exec.as_mut() {
             let was_closed = exec.state.is_closed();
             let changed = exec.drain();
             let closed = (!was_closed && exec.state.is_closed()).then(|| exec.state.label());
-            (changed, closed)
+            (changed, closed, exec.detach_confirmed())
         } else {
-            (false, None)
+            (false, None, false)
         };
         if exec_changed {
             app.mark_dirty();
@@ -264,6 +266,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 format!("Exec session {}", label),
                 false,
             );
+        }
+        if exec_detached {
+            let name = app
+                .exec
+                .as_ref()
+                .map(|exec| exec.session.container_name.clone())
+                .unwrap_or_default();
+            app.close_exec();
+            app.push_output(format!(
+                "[exec] detached from {} (remote process keeps running)",
+                name
+            ));
+            app.notify(NotificationKind::Info, "Exec session detached", false);
         }
         while let Some(task_event) = task_manager.try_next() {
             match task_event {

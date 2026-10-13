@@ -8,6 +8,7 @@ pub struct ExecView {
     pub session: ExecSession,
     pub state: ExecState,
     parser: vt100::Parser,
+    detached: bool,
     scroll_offset: usize,
     area_rows: u16,
     area_cols: u16,
@@ -21,6 +22,7 @@ impl ExecView {
             session,
             state: ExecState::Connecting,
             parser: vt100::Parser::new(rows, cols, SCROLLBACK_LIMIT),
+            detached: false,
             scroll_offset: 0,
             area_rows: rows,
             area_cols: cols,
@@ -35,19 +37,20 @@ impl ExecView {
             match event {
                 ExecEvent::Output(bytes) => self.parser.process(&bytes),
                 ExecEvent::State(state) => self.state = state,
+                ExecEvent::Detached => self.detached = true,
             }
         }
         changed
     }
 
-    pub fn send_input(&mut self, bytes: Vec<u8>) {
-        if self.state.is_closed() {
-            return;
+    pub fn send_input(&mut self, bytes: Vec<u8>) -> bool {
+        if !matches!(self.state, ExecState::Connecting | ExecState::Running) {
+            return false;
         }
         // Typing always returns the viewport to the live screen.
         self.scroll_offset = 0;
         self.parser.screen_mut().set_scrollback(0);
-        self.session.send(ExecControl::Input(bytes));
+        self.session.send(ExecControl::Input(bytes))
     }
 
     /// Keep the emulator and the remote PTY aligned with the rendered area.
@@ -72,15 +75,23 @@ impl ExecView {
     }
 
     /// Detach from the session; the remote process keeps running.
-    pub fn detach(&mut self) {
+    pub fn detach(&mut self) -> bool {
         if self.state.is_closed() {
-            return;
+            return false;
         }
-        self.session.send(ExecControl::Detach);
+        let accepted = self.session.send(ExecControl::Detach);
+        if accepted {
+            self.state = ExecState::Detaching;
+        }
+        accepted
     }
 
     pub fn screen(&self) -> &vt100::Screen {
         self.parser.screen()
+    }
+
+    pub fn detach_confirmed(&self) -> bool {
+        self.detached
     }
 }
 
