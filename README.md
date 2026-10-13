@@ -80,12 +80,13 @@ Completed:
   - asynchronous local host collection for OS, kernel, CPU, load, memory, swap, disks, networks, and Dockpilot runtime data.
    - local system data remains available when Docker is disconnected and never follows a remote Docker context.
 - UX-008 unified logs:
-  - dedicated Logs tab with a bounded global buffer and normalized container/stream metadata.
-  - combined container, Compose service, severity, time, and text filtering primitives plus incremental search.
-  - TXT/JSONL export preserves origin and timestamps; exports warn users that source logs may contain secrets.
+  - dedicated Logs tab with a bounded global buffer, cached viewport, stable selection, and dropped-event count.
+  - interactive container, Compose project/service, severity, time, and text filters plus incremental search/navigation.
+  - independent follow/pause controls and TXT/JSONL export controls preserve origin and timestamps; exports warn users that source logs may contain secrets.
+  - stream assembly preserves fragmented UTF-8 lines and bounds individual line size.
   - global ordering across streams is approximate and does not guarantee causal ordering.
 
-The current TUI provides dashboard, container, image, network, volume, project, system, and help tabs. The System tab reports local host identity, CPU, memory, swap, disks, network interfaces, and Dockpilot runtime details. It never reports remote Docker hosts or secrets. Legacy Docker Machine support was removed; use Docker contexts for local, TCP, or SSH engines.
+The current TUI provides dashboard, container, unified logs, image, network, volume, project, system, and help tabs. The System tab reports local host identity, CPU, memory, swap, disks, network interfaces, and Dockpilot runtime details. It never reports remote Docker hosts or secrets. Legacy Docker Machine support was removed; use Docker contexts for local, TCP, or SSH engines.
 
 > Important: The dedicated log buffer is bounded to 2,000 lines, and general command output uses the configured bounded `VecDeque`. Safety policy is configured at startup; safe mode confirms mutations, destructive actions always require confirmation, and read-only mode blocks mutations.
 
