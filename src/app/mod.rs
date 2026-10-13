@@ -33,6 +33,8 @@ mod output;
 pub mod search;
 #[allow(dead_code)]
 pub mod task_history;
+#[allow(dead_code)]
+pub mod unified_logs;
 
 const MAX_LOG_LINES: usize = 2_000;
 const MAX_EVENT_LINES: usize = 500;
@@ -120,6 +122,7 @@ pub enum ContextAction {
 pub enum Tab {
     Dashboard,
     Container,
+    UnifiedLogs,
     Image,
     Network,
     Volume,
@@ -248,6 +251,7 @@ pub struct App {
     pub(crate) theme: ThemeName,
     pub(crate) dashboard: Option<DashboardData>,
     pub(crate) log_lines: VecDeque<String>,
+    pub(crate) unified_log_buffer: unified_logs::LogBuffer,
     pub(crate) log_filter: String,
     pub(crate) log_level_filter: Option<logs::LogLevel>,
     pub(crate) log_timestamps: bool,
@@ -371,6 +375,7 @@ impl App {
             theme: ThemeName::Dark,
             dashboard: None,
             log_lines: VecDeque::new(),
+            unified_log_buffer: unified_logs::LogBuffer::new(unified_logs::DEFAULT_CAPACITY),
             log_filter: String::new(),
             log_level_filter: None,
             log_timestamps: false,
@@ -1039,7 +1044,11 @@ impl App {
             return None;
         };
         let action = self.context_actions().get(selected).copied()?;
-        self.context_request(action)
+        let request = self.context_request(action);
+        if !matches!(action, ContextAction::Exec) {
+            self.overlay = Overlay::None;
+        }
+        request
     }
 
     pub fn focus_label(&self) -> &'static str {
@@ -1092,7 +1101,7 @@ impl App {
             Tab::Image => Some(TaskRequest::ListImages),
             Tab::Network => Some(TaskRequest::ListNetworks),
             Tab::Volume => Some(TaskRequest::ListVolumes),
-            Tab::Project | Tab::System | Tab::Help => None,
+            Tab::UnifiedLogs | Tab::Project | Tab::System | Tab::Help => None,
         }
     }
 
@@ -1170,6 +1179,21 @@ impl App {
             self.log_lines.pop_front();
         }
         self.log_lines.push_back(line);
+        self.mark_dirty();
+    }
+
+    pub fn push_unified_log_line(&mut self, line: String) {
+        self.unified_log_buffer.push(unified_logs::LogEvent {
+            sequence: 0,
+            container_id: String::new(),
+            container_name: "selected container".to_string(),
+            compose_project: None,
+            compose_service: None,
+            timestamp: None,
+            stream: unified_logs::LogStream::Stdout,
+            severity: logs::classify(&line),
+            message: line,
+        });
         self.mark_dirty();
     }
 
@@ -1273,7 +1297,7 @@ impl App {
 
     pub fn next(&mut self) {
         match self.current_tab {
-            Tab::Dashboard => {}
+            Tab::Dashboard | Tab::UnifiedLogs => {}
             Tab::Container => {
                 if self.focus_target == FocusTarget::Table {
                     let len = self.filtered_containers().len();
@@ -1318,7 +1342,7 @@ impl App {
 
     pub fn previous(&mut self) {
         match self.current_tab {
-            Tab::Dashboard => {}
+            Tab::Dashboard | Tab::UnifiedLogs => {}
             Tab::Container => {
                 if self.focus_target == FocusTarget::Table {
                     let len = self.filtered_containers().len();
@@ -1368,6 +1392,7 @@ impl App {
         self.current_tab = match self.current_tab {
             Tab::Dashboard => Tab::Container,
             Tab::Container => Tab::Image,
+            Tab::UnifiedLogs => Tab::Dashboard,
             Tab::Image => Tab::Network,
             Tab::Network => Tab::Volume,
             Tab::Volume => Tab::Project,
@@ -1382,6 +1407,7 @@ impl App {
         self.current_tab = match self.current_tab {
             Tab::Dashboard => Tab::Help,
             Tab::Container => Tab::Dashboard,
+            Tab::UnifiedLogs => Tab::Dashboard,
             Tab::Image => Tab::Container,
             Tab::Network => Tab::Image,
             Tab::Volume => Tab::Network,
@@ -1394,6 +1420,11 @@ impl App {
 
     pub fn show_help(&mut self) {
         self.current_tab = Tab::Help;
+        self.sync_focus_target();
+    }
+
+    pub fn show_unified_logs(&mut self) {
+        self.current_tab = Tab::UnifiedLogs;
         self.sync_focus_target();
     }
 
@@ -1852,7 +1883,7 @@ impl App {
 
     pub fn execute_selected(&mut self) -> Option<TaskRequest> {
         match self.current_tab {
-            Tab::Dashboard => None,
+            Tab::Dashboard | Tab::UnifiedLogs => None,
             Tab::Container => {
                 if self.focus_target == FocusTarget::Table {
                     let containers = self.filtered_containers();
@@ -2475,6 +2506,27 @@ mod tests {
         assert!(!app.context_actions().contains(&ContextAction::Start));
         let request = app.context_request(ContextAction::Remove).unwrap();
         assert_eq!(request.mutation(), Mutation::Destructive);
+    }
+
+    #[test]
+    fn context_stop_request_uses_selected_container_and_closes_menu() {
+        let mut app = App::new();
+        app.set_containers(vec![ContainerRow {
+            id: "container-id".into(),
+            name: "api".into(),
+            image: "demo".into(),
+            state: "running".into(),
+            status: "Up".into(),
+        }]);
+        app.overlay = Overlay::Context { selected: 3 };
+
+        let request = app.context_request_selected().expect("stop request");
+        assert!(matches!(
+            request,
+            TaskRequest::ContainerLifecycle { id, operation: ContainerLifecycle::Stop }
+                if id == "container-id"
+        ));
+        assert_eq!(app.overlay, Overlay::None);
     }
 
     #[test]
