@@ -33,7 +33,7 @@
 - [x] DS-022: CI, integration tests, documentation and release packaging.
 
 ## UX
-- [x] UX-008: Unified Logs core with bounded multi-container stream normalization, stable timestamp ordering, combined filters, incremental search, follow/pause cancellation primitives, Compose label metadata, and TXT/JSONL export.
+- [x] UX-008.1: Unified Logs TUI filters, search/navigation, cached viewport, follow/pause state, bounded stream line assembly, and TXT/JSONL export controls.
 - [x] UX-006: Local system information tab with asynchronous host metrics, resource details, and refresh behavior.
 - [x] UX-001: Responsive layout, explicit focus, contextual details, and adaptive TUI states.
   - Rendering extracted to `src/tui/screens/`.
