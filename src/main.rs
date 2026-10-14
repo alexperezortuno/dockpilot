@@ -140,6 +140,9 @@ fn dispatch_request(
         }
         return;
     }
+    // A follow/events stream occupies the single task slot. User mutations take
+    // priority and stop only that stream before being dispatched.
+    task_manager.cancel_stream();
     if !task_manager.spawn(request) {
         app.push_output("[Task in progress: press x to cancel]");
         app.notify(
