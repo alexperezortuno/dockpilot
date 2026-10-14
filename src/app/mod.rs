@@ -6,6 +6,7 @@ use crate::{
             ContainerLifecycle, ContainerRow, DashboardData, HealthSnapshot, ImageRow, NetworkRow,
             VolumeRow,
         },
+        compose::ComposeProject,
     },
     security::{Mutation, SafetyPolicy},
     system::SystemSnapshot,
@@ -13,7 +14,7 @@ use crate::{
 };
 use ratatui::widgets::ListState;
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     path::PathBuf,
 };
 
@@ -92,6 +93,7 @@ pub enum VolumeAction {
 #[derive(Debug, Clone)]
 pub enum ProjectAction {
     SetFolder,
+    RegisterFolder,
     ComposeUp,
     ComposeUpProfile,
     ComposeDown,
@@ -220,13 +222,14 @@ pub enum PendingAction {
     UnifiedLogsExportJsonl { filtered: bool },
     // Project
     ProjectSetFolder,
+    RegisterComposeFolder,
     ComposeProfileUp,
 }
 
 pub struct App {
     pub(crate) current_tab: Tab,
     pub(crate) focus_target: FocusTarget,
-    resource_focus: [FocusTarget; 4],
+    resource_focus: [FocusTarget; 5],
     pub(crate) container_actions: Vec<ContainerAction>,
     pub(crate) image_actions: Vec<ImageAction>,
     pub(crate) images: Vec<ImageRow>,
@@ -248,9 +251,16 @@ pub struct App {
     pub(crate) network_list_state: ListState,
     pub(crate) volume_list_state: ListState,
     pub(crate) project_list_state: ListState,
+    pub(crate) compose_project_table_state: ratatui::widgets::TableState,
+    pub(crate) compose_service_list_state: ratatui::widgets::TableState,
+    pub(crate) compose_projects: Vec<ComposeProject>,
+    compose_engine_projects: Vec<ComposeProject>,
+    compose_local_projects: Vec<ComposeProject>,
+    pub(crate) expanded_projects: HashSet<String>,
     pub(crate) output_scroll: usize,
     pub(crate) project_folder: String,
     pub(crate) engine_status: String,
+    pub(crate) docker_context: String,
     pub(crate) task_status: String,
     pub(crate) theme: ThemeName,
     pub(crate) dashboard: Option<DashboardData>,
@@ -306,6 +316,7 @@ impl App {
             focus_target: FocusTarget::Table,
             resource_focus: [
                 FocusTarget::Table,
+                FocusTarget::Actions,
                 FocusTarget::Actions,
                 FocusTarget::Actions,
                 FocusTarget::Actions,
@@ -366,6 +377,7 @@ impl App {
                 ProjectAction::ComposeUpProfile,
                 ProjectAction::ComposeDown,
                 ProjectAction::ComposeConfig,
+                ProjectAction::RegisterFolder,
             ],
             output_lines: VecDeque::new(),
             output_capacity: 2_000,
@@ -374,9 +386,16 @@ impl App {
             network_list_state: ListState::default(),
             volume_list_state: ListState::default(),
             project_list_state: ListState::default(),
+            compose_project_table_state: ratatui::widgets::TableState::default(),
+            compose_service_list_state: ratatui::widgets::TableState::default(),
+            compose_projects: Vec::new(),
+            compose_engine_projects: Vec::new(),
+            compose_local_projects: Vec::new(),
+            expanded_projects: HashSet::new(),
             output_scroll: 0,
             project_folder,
             engine_status: "checking Docker Engine".to_string(),
+            docker_context: "default".to_string(),
             task_status: "idle".to_string(),
             theme: ThemeName::Dark,
             dashboard: None,
@@ -422,6 +441,8 @@ impl App {
         app.network_list_state.select(Some(0));
         app.volume_list_state.select(Some(0));
         app.project_list_state.select(Some(0));
+        app.compose_project_table_state.select(Some(0));
+        app.compose_service_list_state.select(Some(0));
 
         app
     }
@@ -474,6 +495,96 @@ impl App {
         let selected = self.selected_resource_id(ResourceKind::Container);
         self.containers = containers;
         self.restore_selection(&selected, ResourceKind::Container);
+        self.mark_dirty();
+    }
+
+    pub fn set_compose_projects(&mut self, projects: Vec<ComposeProject>) {
+        let selected = self
+            .compose_project_table_state
+            .selected()
+            .and_then(|index| self.compose_projects.get(index))
+            .map(|project| {
+                (
+                    project.context.clone(),
+                    project.name.clone(),
+                    project.source.clone(),
+                )
+            });
+        self.compose_engine_projects = projects;
+        self.compose_projects = self.compose_engine_projects.clone();
+        for project in &self.compose_local_projects {
+            if !self.compose_projects.iter().any(|current| {
+                current.context == project.context
+                    && current.name == project.name
+                    && current.source == project.source
+            }) {
+                self.compose_projects.push(project.clone());
+            }
+        }
+        let index = selected.and_then(|identity| {
+            self.compose_projects.iter().position(|project| {
+                project.context == identity.0
+                    && project.name == identity.1
+                    && project.source == identity.2
+            })
+        });
+        self.compose_project_table_state
+            .select(index.or((!self.compose_projects.is_empty()).then_some(0)));
+        self.compose_service_list_state.select(Some(0));
+        self.mark_dirty();
+    }
+
+    pub fn register_compose_folder(&mut self, path: impl Into<PathBuf>) {
+        let path = path.into();
+        let has_compose_file = [
+            "compose.yaml",
+            "compose.yml",
+            "docker-compose.yaml",
+            "docker-compose.yml",
+        ]
+        .iter()
+        .any(|file| path.join(file).is_file());
+        if !path.is_dir() || !has_compose_file {
+            self.push_output(format!(
+                "[project] no Compose file found in {}",
+                path.display()
+            ));
+            return;
+        }
+        let name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("compose-project");
+        let project = crate::docker::compose::registered_project(
+            &self.docker_context,
+            path.to_string_lossy().to_string(),
+            name,
+        );
+        if !self
+            .compose_local_projects
+            .iter()
+            .any(|current| current.source == project.source)
+        {
+            self.compose_local_projects.push(project);
+            self.set_compose_projects(self.compose_engine_projects.clone());
+            self.push_output(format!(
+                "[project] registered Compose folder: {}",
+                path.display()
+            ));
+        }
+    }
+
+    pub fn toggle_project_expanded(&mut self) {
+        let Some(index) = self.compose_project_table_state.selected() else {
+            return;
+        };
+        let Some(project) = self.compose_projects.get(index) else {
+            return;
+        };
+        let key = format!("{}:{}", project.context, project.name);
+        if !self.expanded_projects.insert(key.clone()) {
+            self.expanded_projects.remove(&key);
+        }
         self.mark_dirty();
     }
 
@@ -545,6 +656,7 @@ impl App {
             Tab::Image => Some(1),
             Tab::Network => Some(2),
             Tab::Volume => Some(3),
+            Tab::Project => Some(4),
             _ => None,
         }
     }
@@ -882,6 +994,10 @@ impl App {
         self.mark_dirty();
     }
 
+    pub fn set_docker_context(&mut self, context: impl Into<String>) {
+        self.docker_context = context.into();
+    }
+
     pub fn set_task_status(&mut self, status: impl Into<String>) {
         self.task_status = status.into();
         self.mark_dirty();
@@ -1109,7 +1225,10 @@ impl App {
             Tab::Image => Some(TaskRequest::ListImages),
             Tab::Network => Some(TaskRequest::ListNetworks),
             Tab::Volume => Some(TaskRequest::ListVolumes),
-            Tab::UnifiedLogs | Tab::Project | Tab::System | Tab::Help => None,
+            Tab::Project => Some(TaskRequest::ListComposeProjects {
+                context: self.docker_context.clone(),
+            }),
+            Tab::UnifiedLogs | Tab::System | Tab::Help => None,
         }
     }
 
@@ -1569,7 +1688,14 @@ impl App {
                 }
             }
             Tab::Project => {
-                Self::next_in_list(&mut self.project_list_state, self.project_actions.len())
+                if self.focus_target == FocusTarget::Table {
+                    Self::next_in_table(
+                        &mut self.compose_project_table_state,
+                        self.compose_projects.len(),
+                    )
+                } else {
+                    Self::next_in_list(&mut self.project_list_state, self.project_actions.len())
+                }
             }
             Tab::System | Tab::Help => {}
         }
@@ -1617,7 +1743,14 @@ impl App {
                 }
             }
             Tab::Project => {
-                Self::previous_in_list(&mut self.project_list_state, self.project_actions.len())
+                if self.focus_target == FocusTarget::Table {
+                    Self::previous_in_table(
+                        &mut self.compose_project_table_state,
+                        self.compose_projects.len(),
+                    )
+                } else {
+                    Self::previous_in_list(&mut self.project_list_state, self.project_actions.len())
+                }
             }
             Tab::System | Tab::Help => {}
         }
@@ -1896,6 +2029,10 @@ impl App {
                 self.push_output(format!("[project] folder set: {}", folder));
                 self.execute_command(CommandSpec::new("ls").args(["-la"]).arg(folder))
             }
+            PendingAction::RegisterComposeFolder => {
+                self.register_compose_folder(PathBuf::from(value));
+                None
+            }
             PendingAction::ComposeProfileUp => {
                 self.execute_compose(&["compose", "--profile", value, "up", "-d"])
             }
@@ -2115,6 +2252,10 @@ impl App {
             ProjectAction::SetFolder => {
                 self.start_input("Project folder path:", PendingAction::ProjectSetFolder)
             }
+            ProjectAction::RegisterFolder => self.start_input(
+                "Compose folder to register:",
+                PendingAction::RegisterComposeFolder,
+            ),
             ProjectAction::ComposeUp => self.execute_compose(&["compose", "up", "-d"]),
             ProjectAction::ComposeUpProfile => {
                 self.start_input("Compose profile:", PendingAction::ComposeProfileUp)
@@ -2207,6 +2348,24 @@ impl App {
                 None
             }
             Tab::Project => {
+                if self.focus_target == FocusTarget::Table {
+                    if self.compose_projects.is_empty() {
+                        if self
+                            .project_list_state
+                            .selected()
+                            .is_some_and(|index| index > 0)
+                            && let Some(i) = self.project_list_state.selected()
+                            && let Some(action) = self.project_actions.get(i).cloned()
+                        {
+                            return self.run_project_action(&action);
+                        }
+                        return Some(TaskRequest::ListComposeProjects {
+                            context: self.docker_context.clone(),
+                        });
+                    }
+                    self.toggle_project_expanded();
+                    return None;
+                }
                 if let Some(i) = self.project_list_state.selected()
                     && let Some(action) = self.project_actions.get(i).cloned()
                 {
@@ -2531,6 +2690,40 @@ mod tests {
         let request = app.confirm_input().expect("compose profile request");
 
         assert_eq!(request.mutation(), Mutation::Mutating);
+    }
+
+    #[test]
+    fn registering_a_compose_folder_keeps_spaces_and_marks_it_local() {
+        let path =
+            std::env::temp_dir().join(format!("dockpilot compose folder {}", std::process::id()));
+        std::fs::create_dir_all(&path).expect("temporary Compose folder");
+        std::fs::write(path.join("compose.yaml"), "services: {}\n").expect("compose file");
+
+        let mut app = App::new();
+        app.register_compose_folder(path.clone());
+
+        assert_eq!(app.compose_projects.len(), 1);
+        assert!(matches!(
+            app.compose_projects[0].source,
+            crate::docker::compose::ProjectSource::LocalFile(_)
+        ));
+        assert!(
+            app.compose_projects[0]
+                .name
+                .contains("dockpilot compose folder")
+        );
+        std::fs::remove_dir_all(path).expect("temporary Compose folder cleanup");
+    }
+
+    #[test]
+    fn project_expansion_is_preserved_by_refresh() {
+        let mut app = App::new();
+        let project = crate::docker::compose::registered_project("ctx", "/tmp/backend", "backend");
+        app.set_compose_projects(vec![project.clone()]);
+        app.toggle_project_expanded();
+        assert!(app.expanded_projects.contains("ctx:backend"));
+        app.set_compose_projects(vec![project]);
+        assert!(app.expanded_projects.contains("ctx:backend"));
     }
 
     #[test]
