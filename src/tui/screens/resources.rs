@@ -11,6 +11,101 @@ use ratatui::{
     widgets::{Block, Borders, Cell, List, ListItem, Row},
 };
 
+pub fn draw_project(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(32), Constraint::Percentage(68)])
+        .split(area);
+    let project_rows = app.compose_projects.iter().map(|project| {
+        let project_key = format!("{}:{}", project.context, project.name);
+        let expanded = app.expanded_projects.contains(&project_key);
+        let services = if expanded {
+            project
+                .services
+                .iter()
+                .map(|service| service.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        } else {
+            String::new()
+        };
+        Row::new(vec![Cell::from(format!(
+            "{} {} {}{}{}",
+            if expanded { "v" } else { ">" },
+            if project.source == crate::docker::compose::ProjectSource::Engine {
+                "E"
+            } else {
+                "L"
+            },
+            project.name,
+            if services.is_empty() { "" } else { " -> " },
+            services
+        ))])
+    });
+    table::draw_table(
+        f,
+        columns[0],
+        project_rows,
+        [Constraint::Min(12)],
+        ["Projects"].into_iter().map(Cell::from),
+        "Projects (E=Engine, L=local file)".to_string(),
+        &mut app.compose_project_table_state,
+        colors,
+    );
+    let selected = app
+        .compose_project_table_state
+        .selected()
+        .and_then(|index| app.compose_projects.get(index));
+    let services = selected.map(|project| &project.services[..]).unwrap_or(&[]);
+    if app.focus_target == FocusTarget::Actions {
+        table::draw_actions(
+            f,
+            columns[1],
+            "Compose Actions",
+            app.project_actions
+                .iter()
+                .map(|action| ListItem::new(project_label(action))),
+            &mut app.project_list_state,
+            colors,
+        );
+        return;
+    }
+    let service_rows = services.iter().map(|service| {
+        let container_count = service.containers.len();
+        let container = service.containers.first();
+        Row::new(vec![
+            Cell::from(service.name.clone()),
+            Cell::from(container.map_or_else(|| "-".to_string(), |value| value.state.clone())),
+            Cell::from(container.map_or_else(|| "-".to_string(), |value| value.health.clone())),
+            Cell::from(container_count.to_string()),
+            Cell::from(container.map_or_else(|| "-".to_string(), |value| value.image.clone())),
+            Cell::from(container.map_or_else(|| "-".to_string(), |value| value.ports.clone())),
+        ])
+    });
+    table::draw_table(
+        f,
+        columns[1],
+        service_rows,
+        [
+            Constraint::Min(12),
+            Constraint::Length(10),
+            Constraint::Length(12),
+            Constraint::Length(7),
+            Constraint::Min(16),
+            Constraint::Min(12),
+        ],
+        ["Name", "Status", "Health", "#", "Image", "Ports"]
+            .into_iter()
+            .map(Cell::from),
+        format!(
+            "Services [{}]",
+            selected.map_or("none", |project| project.name.as_str())
+        ),
+        &mut app.compose_service_list_state,
+        colors,
+    );
+}
+
 pub fn draw(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
     let show_secondary = app.show_details || app.focus_target == FocusTarget::Actions;
     let panes = if show_secondary {
@@ -404,6 +499,7 @@ fn volume_label(action: &VolumeAction) -> &'static str {
 fn project_label(action: &ProjectAction) -> &'static str {
     match action {
         ProjectAction::SetFolder => "Set Project Folder",
+        ProjectAction::RegisterFolder => "Register Compose Folder",
         ProjectAction::ComposeUp => "Compose Up",
         ProjectAction::ComposeUpProfile => "Compose Up (Profile)",
         ProjectAction::ComposeDown => "Compose Down",
