@@ -1626,8 +1626,8 @@ impl App {
     pub fn next_tab(&mut self) {
         self.current_tab = match self.current_tab {
             Tab::Dashboard => Tab::Container,
-            Tab::Container => Tab::Image,
-            Tab::UnifiedLogs => Tab::Dashboard,
+            Tab::Container => Tab::UnifiedLogs,
+            Tab::UnifiedLogs => Tab::Image,
             Tab::Image => Tab::Network,
             Tab::Network => Tab::Volume,
             Tab::Volume => Tab::Project,
@@ -1642,7 +1642,7 @@ impl App {
         self.current_tab = match self.current_tab {
             Tab::Dashboard => Tab::Help,
             Tab::Container => Tab::Dashboard,
-            Tab::UnifiedLogs => Tab::Dashboard,
+            Tab::UnifiedLogs => Tab::Container,
             Tab::Image => Tab::Container,
             Tab::Network => Tab::Image,
             Tab::Volume => Tab::Network,
@@ -2639,11 +2639,11 @@ mod tests {
         let mut app = App::new();
 
         app.next_tab();
-        assert_eq!(app.current_tab, Tab::Image);
+        assert_eq!(app.current_tab, Tab::UnifiedLogs);
         app.previous_tab();
         assert_eq!(app.current_tab, Tab::Container);
 
-        for _ in 0..5 {
+        for _ in 0..6 {
             app.next_tab();
         }
         assert_eq!(app.current_tab, Tab::System);
@@ -2656,6 +2656,8 @@ mod tests {
     #[test]
     fn entering_resource_tabs_requests_only_that_tab() {
         let mut app = App::new();
+        app.next_tab();
+        assert!(app.current_tab_refresh_request().is_none());
         app.next_tab();
         assert_eq!(
             app.current_tab_refresh_request().unwrap().description(),
