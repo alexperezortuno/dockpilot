@@ -24,6 +24,8 @@
 | `E` | Export all retained logs as TXT |
 | `J` | Export filtered logs as JSONL |
 | `x` | Cancel the active task |
+| `Tab` / `Shift+Tab` | In Project, switch between explorer and Compose actions |
+| `Enter` | In Project explorer, expand/collapse the selected project; in actions, execute the selected Compose action |
 | `o` / `D` / `C` | Toggle output / details / compact layout |
 | `?` | Open help |
 | `q` / `Esc` / `Ctrl+C` | Quit |
