@@ -210,7 +210,7 @@ pub enum TaskEvent {
 pub struct TaskManager {
     sender: mpsc::Sender<TaskEvent>,
     receiver: mpsc::Receiver<TaskEvent>,
-    active: Option<(u64, JoinHandle<()>)>,
+    active: Option<(u64, JoinHandle<()>, bool)>,
     client: Option<bollard::Docker>,
     next_id: u64,
 }
@@ -250,6 +250,10 @@ impl TaskManager {
 
         let id = self.next_id;
         self.next_id += 1;
+        let is_stream = matches!(
+            &request,
+            TaskRequest::ContainerLogs { .. } | TaskRequest::Events
+        );
         let sender = self.sender.clone();
         let client = self.client.clone();
         let handle = tokio::spawn(async move {
@@ -844,7 +848,7 @@ impl TaskManager {
             }
         });
 
-        self.active = Some((id, handle));
+        self.active = Some((id, handle, is_stream));
         true
     }
 
@@ -856,17 +860,25 @@ impl TaskManager {
         if self
             .active
             .as_ref()
-            .is_some_and(|(active_id, _)| *active_id == id)
+            .is_some_and(|(active_id, _, _)| *active_id == id)
         {
             self.active = None;
         }
     }
 
     pub fn cancel(&mut self) -> bool {
-        if let Some((id, handle)) = self.active.take() {
+        if let Some((id, handle, _)) = self.active.take() {
             let _ = self.sender.try_send(TaskEvent::Cancelled { id });
             handle.abort();
             true
+        } else {
+            false
+        }
+    }
+
+    pub fn cancel_stream(&mut self) -> bool {
+        if self.active.as_ref().is_some_and(|(_, _, stream)| *stream) {
+            self.cancel()
         } else {
             false
         }
@@ -924,6 +936,18 @@ mod tests {
         }
         manager.cancel();
         panic!("task did not publish its origin");
+    }
+
+    #[tokio::test]
+    async fn only_a_log_stream_can_be_preempted_for_a_user_action() {
+        let mut manager = TaskManager::new(4);
+        assert!(manager.spawn(TaskRequest::ContainerLogs {
+            id: "container-id".into(),
+            follow: true,
+            timestamps: true,
+        }));
+        assert!(manager.cancel_stream());
+        assert!(!manager.cancel_stream());
     }
 
     #[test]
