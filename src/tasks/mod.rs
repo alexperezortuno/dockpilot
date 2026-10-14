@@ -4,8 +4,8 @@ use crate::{
         client::{
             ContainerLifecycle, ContainerRow, DashboardData, HealthSnapshot, ImageRow, NetworkRow,
             VolumeRow, apply_container_lifecycle, container_health, dashboard_data,
-            inspect_container, list_containers, list_images, list_networks, list_volumes,
-            start_all_containers,
+            inspect_container, list_compose_containers, list_containers, list_images,
+            list_networks, list_volumes, start_all_containers,
         },
         exec::ExecCommand,
         metrics::container_stats,
@@ -27,6 +27,9 @@ pub enum TaskRequest {
     StopAll,
     StartAll,
     ListContainers,
+    ListComposeProjects {
+        context: String,
+    },
     ListImages,
     ListNetworks,
     ListVolumes,
@@ -77,6 +80,7 @@ impl TaskRequest {
             Self::StopAll => Mutation::Destructive,
             Self::StartAll => Mutation::Mutating,
             Self::ListContainers => Mutation::ReadOnly,
+            Self::ListComposeProjects { .. } => Mutation::ReadOnly,
             Self::ListImages => Mutation::ReadOnly,
             Self::ListNetworks | Self::ListVolumes => Mutation::ReadOnly,
             Self::InspectContainer { .. } => Mutation::ReadOnly,
@@ -104,6 +108,9 @@ impl TaskRequest {
             Self::StopAll => "stop all containers".to_string(),
             Self::StartAll => "start all containers".to_string(),
             Self::ListContainers => "list containers".to_string(),
+            Self::ListComposeProjects { context } => {
+                format!("discover Compose projects ({context})")
+            }
             Self::ListImages => "list images".to_string(),
             Self::ListNetworks => "list networks".to_string(),
             Self::ListVolumes => "list volumes".to_string(),
@@ -165,6 +172,10 @@ pub enum TaskEvent {
     Containers {
         id: u64,
         containers: Vec<ContainerRow>,
+    },
+    ComposeProjects {
+        id: u64,
+        projects: Vec<crate::docker::compose::ComposeProject>,
     },
     Images {
         id: u64,
@@ -275,6 +286,9 @@ impl TaskManager {
                 TaskRequest::StopAll => "stopping active containers".to_string(),
                 TaskRequest::StartAll => "starting stopped containers".to_string(),
                 TaskRequest::ListContainers => "querying containers".to_string(),
+                TaskRequest::ListComposeProjects { .. } => {
+                    "discovering Compose projects".to_string()
+                }
                 TaskRequest::ListImages => "querying images".to_string(),
                 TaskRequest::ListNetworks => "querying networks".to_string(),
                 TaskRequest::ListVolumes => "querying volumes".to_string(),
@@ -405,6 +419,34 @@ impl TaskManager {
                                 id,
                                 message: "Docker Engine disconnected; cannot list containers"
                                     .to_string(),
+                            })
+                            .await;
+                    }
+                },
+                TaskRequest::ListComposeProjects { context } => match client {
+                    Some(client) => match list_compose_containers(&client).await {
+                        Ok(containers) => {
+                            let projects =
+                                crate::docker::compose::discover_projects(&context, containers);
+                            let _ = sender
+                                .send(TaskEvent::ComposeProjects { id, projects })
+                                .await;
+                        }
+                        Err(error) => {
+                            let _ = sender
+                                .send(TaskEvent::Failed {
+                                    id,
+                                    message: format!("Compose discovery failed: {}", error),
+                                })
+                                .await;
+                        }
+                    },
+                    None => {
+                        let _ = sender
+                            .send(TaskEvent::Failed {
+                                id,
+                                message: "Docker Engine disconnected; Compose projects unavailable"
+                                    .into(),
                             })
                             .await;
                     }
