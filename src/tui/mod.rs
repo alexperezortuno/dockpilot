@@ -11,7 +11,8 @@ use crate::config::ThemeName;
 use ratatui::{
     Frame,
     style::{Color, Modifier, Style},
-    widgets::{Block, Borders, Paragraph, Tabs},
+    text::{Line, Span},
+    widgets::{Block, Borders, Paragraph},
 };
 
 #[derive(Clone, Copy)]
@@ -60,17 +61,25 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
         app.show_output,
         app.compact_layout,
     );
-    let tab_titles = [
-        "Dashboard",
-        "Container",
-        "Logs",
-        "Image",
-        "Network",
-        "Volume",
-        "Project",
-        "System",
-        "Help",
-    ];
+    let tab_titles: Vec<&str> = if f.area().width < 60 {
+        vec!["D", "C", "L", "I", "N", "V", "P", "S", "?"]
+    } else if f.area().width < 100 {
+        vec![
+            "Dash", "Cont", "Logs", "Img", "Net", "Vol", "Proj", "Sys", "Help",
+        ]
+    } else {
+        vec![
+            "Dashboard",
+            "Container",
+            "Logs",
+            "Image",
+            "Network",
+            "Volume",
+            "Project",
+            "System",
+            "Help",
+        ]
+    };
     let selected_tab = match app.current_tab {
         Tab::Dashboard => 0,
         Tab::Container => 1,
@@ -83,20 +92,34 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
         Tab::Help => 8,
     };
 
-    let tabs = Tabs::new(tab_titles)
-        .block(
+    let tab_line = Line::from(
+        tab_titles
+            .iter()
+            .enumerate()
+            .flat_map(|(index, title)| {
+                let separator = (index > 0).then(|| Span::raw(" "));
+                let label = Span::styled(
+                    format!("[{}]", title),
+                    if index == selected_tab {
+                        Style::default()
+                            .fg(colors.accent)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(colors.foreground)
+                    },
+                );
+                separator.into_iter().chain(std::iter::once(label))
+            })
+            .collect::<Vec<_>>(),
+    );
+    f.render_widget(
+        Paragraph::new(tab_line).block(
             Block::default()
                 .borders(Borders::ALL)
                 .title(format!(" Dockpilot | Docker: {} ", app.engine_status)),
-        )
-        .select(selected_tab)
-        .style(Style::default().fg(colors.foreground))
-        .highlight_style(
-            Style::default()
-                .fg(colors.accent)
-                .add_modifier(Modifier::BOLD),
-        );
-    f.render_widget(tabs, layout.header);
+        ),
+        layout.header,
+    );
     f.render_widget(
         Paragraph::new(footer_line(
             app.focus_label(),
@@ -111,9 +134,8 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
         Tab::Container | Tab::Image | Tab::Network | Tab::Volume => {
             screens::resources::draw(f, app, layout.content, colors)
         }
-        Tab::Project | Tab::Help => {
-            screens::resources::draw_actions(f, app, layout.content, colors)
-        }
+        Tab::Project => screens::resources::draw_project(f, app, layout.content, colors),
+        Tab::Help => screens::resources::draw_actions(f, app, layout.content, colors),
         Tab::System => screens::system::draw(f, app, layout.content, colors),
     }
 
@@ -180,6 +202,14 @@ mod tests {
                 let _ = render(width, height, &mut app);
             }
         }
+    }
+
+    #[test]
+    fn keeps_tab_menu_visible_on_narrow_terminals() {
+        let mut app = App::new();
+        app.current_tab = Tab::Project;
+        let output = render(40, 12, &mut app);
+        assert!(output.contains("D") && output.contains("P") && output.contains("?"));
     }
 
     #[test]
