@@ -1,4 +1,5 @@
 pub mod client;
+pub mod compose;
 pub mod exec;
 #[allow(dead_code)]
 pub mod metrics;

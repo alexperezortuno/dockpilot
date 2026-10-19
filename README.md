@@ -86,6 +86,12 @@ Completed:
   - stream assembly preserves fragmented UTF-8 lines and bounds individual line size.
   - global ordering across streams is approximate and does not guarantee causal ordering.
 
+  UX-009 Compose workspace (in progress):
+  - discovers Engine-backed projects from official Compose labels using the active Docker context;
+  - groups services and containers, including stopped containers when Docker reports them;
+  - renders asynchronous status, health, replica count, image, published ports, restart totals, and uptime in the Project tab;
+  - local Compose file registration is available in the Project actions; resolved dependencies, contextual actions, and direct Unified Logs navigation remain pending.
+
 The current TUI provides dashboard, container, unified logs, image, network, volume, project, system, and help tabs. The System tab reports local host identity, CPU, memory, swap, disks, network interfaces, and Dockpilot runtime details. It never reports remote Docker hosts or secrets. Legacy Docker Machine support was removed; use Docker contexts for local, TCP, or SSH engines.
 
 > Important: The dedicated log buffer is bounded to 2,000 lines, and general command output uses the configured bounded `VecDeque`. Safety policy is configured at startup; safe mode confirms mutations, destructive actions always require confirmation, and read-only mode blocks mutations.

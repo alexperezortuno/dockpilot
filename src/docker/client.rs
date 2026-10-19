@@ -144,6 +144,85 @@ pub async fn list_containers(client: &Docker) -> Result<Vec<ContainerRow>, Strin
         .collect())
 }
 
+pub async fn list_compose_containers(
+    client: &Docker,
+) -> Result<Vec<crate::docker::compose::ComposeContainer>, String> {
+    let options = ListContainersOptionsBuilder::new().all(true).build();
+    let containers = client
+        .list_containers(Some(options))
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut result = Vec::new();
+    for container in containers {
+        let labels = container.labels.unwrap_or_default();
+        let Some(project) = crate::docker::compose::compose_project_name(&labels) else {
+            continue;
+        };
+        let Some(service) = crate::docker::compose::compose_service_name(&labels) else {
+            continue;
+        };
+        let id = container.id.unwrap_or_else(|| "-".to_string());
+        let name = container
+            .names
+            .unwrap_or_default()
+            .into_iter()
+            .next()
+            .map(|name| name.trim_start_matches('/').to_string())
+            .unwrap_or_else(|| id.clone());
+        let ports = container
+            .ports
+            .unwrap_or_default()
+            .into_iter()
+            .map(|port| {
+                format!(
+                    "{}:{}",
+                    port.public_port
+                        .map_or("-".to_string(), |value| value.to_string()),
+                    port.private_port
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let inspected = client
+            .inspect_container(
+                &id,
+                None::<bollard::query_parameters::InspectContainerOptions>,
+            )
+            .await
+            .ok();
+        let health = inspected
+            .as_ref()
+            .and_then(|container| container.state.as_ref())
+            .and_then(|state| state.health.as_ref())
+            .and_then(|health| health.status.as_ref())
+            .map(ToString::to_string)
+            .filter(|status| status != "none" && !status.is_empty())
+            .unwrap_or_else(|| "no-check".into());
+        result.push(crate::docker::compose::ComposeContainer {
+            id,
+            service: service.to_string(),
+            name: format!("{project}/{}", name),
+            state: container
+                .state
+                .map(|state| format!("{state:?}"))
+                .unwrap_or_else(|| "unknown".into()),
+            status: container.status.unwrap_or_else(|| "-".into()),
+            image: container.image.unwrap_or_else(|| "-".into()),
+            ports,
+            health,
+            restarts: inspected
+                .as_ref()
+                .and_then(|container| container.restart_count)
+                .unwrap_or(0),
+            started_at: inspected
+                .as_ref()
+                .and_then(|container| container.state.as_ref())
+                .and_then(|state| state.started_at.clone()),
+        });
+    }
+    Ok(result)
+}
+
 pub async fn list_images(client: &Docker) -> Result<Vec<ImageRow>, String> {
     let options = ListImagesOptionsBuilder::new().all(true).build();
     let images = client

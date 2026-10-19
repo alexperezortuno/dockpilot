@@ -214,6 +214,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::with_project_folder(config.project_folder.clone());
+    app.set_docker_context(config.docker_context.as_deref().unwrap_or("default"));
     app.set_policy(policy);
     app.set_output_capacity(config.output_capacity);
     app.set_theme(config.theme);
@@ -371,6 +372,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         app.notify(NotificationKind::Success, "Containers refreshed", false);
                     } else if app.refresh_recovered(&description) {
                         app.notify(NotificationKind::Info, "Docker refresh recovered", false);
+                    }
+                    task_manager.complete(id);
+                    if origin != TaskOrigin::User {
+                        task_manager.spawn_with_origin(
+                            TaskRequest::ListComposeProjects {
+                                context: app.docker_context.clone(),
+                            },
+                            TaskOrigin::System,
+                        );
+                    }
+                }
+                TaskEvent::ComposeProjects { id, projects } => {
+                    let (origin, description) = task_origins
+                        .remove(&id)
+                        .unwrap_or((TaskOrigin::User, String::new()));
+                    app.set_task_status("idle");
+                    app.set_compose_projects(projects);
+                    if origin == TaskOrigin::Background && app.refresh_recovered(&description) {
+                        app.notify(NotificationKind::Info, "Compose discovery recovered", false);
                     }
                     task_manager.complete(id);
                 }
@@ -789,7 +809,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             None
                         }
                         (KeyCode::Char(key), _) if key == shortcuts.refresh => {
-                            Some(TaskRequest::ListContainers)
+                            if matches!(app.current_tab, Tab::Project) {
+                                Some(TaskRequest::ListComposeProjects {
+                                    context: app.docker_context.clone(),
+                                })
+                            } else {
+                                Some(TaskRequest::ListContainers)
+                            }
                         }
                         (KeyCode::Char('R'), _) => {
                             app.toggle_auto_refresh();
