@@ -36,8 +36,8 @@
 - [x] UX-008.1: Unified Logs TUI filters, search/navigation, cached viewport, follow/pause state, bounded stream line assembly, and TXT/JSONL export controls.
 - [ ] UX-009: Docker Compose workspace.
   - [x] UX-009A: Engine discovery, context-aware identity, stopped containers, stable selection, expansion, and local Compose folder registration.
-  - [ ] UX-009B: Asynchronous status/health/replicas/images/ports are implemented; restart and start-time rendering remains.
-  - [ ] UX-009C: Contextual service actions and Compose-aware Unified Logs navigation.
+  - [x] UX-009B: Asynchronous status, health, replicas, images, ports, restart totals, and uptime rendering.
+  - [x] UX-009C: Contextual service actions and Compose-aware Unified Logs navigation.
   - [ ] UX-009D: Resolved Compose dependencies and missing/cyclic dependency states.
   - [ ] UX-009E: Project/service navigation into the existing Unified Logs view.
   - [ ] UX-009F: Adaptive Project workspace rendering and explicit project/actions focus are implemented; details/action layout remains.
