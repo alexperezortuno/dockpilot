@@ -100,6 +100,16 @@ pub enum ProjectAction {
     ComposeConfig,
 }
 
+#[derive(Debug, Clone)]
+pub enum ServiceAction {
+    Start,
+    Stop,
+    Restart,
+    Logs,
+    Recreate,
+    Scale,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResourceKind {
     Container,
@@ -224,6 +234,7 @@ pub enum PendingAction {
     ProjectSetFolder,
     RegisterComposeFolder,
     ComposeProfileUp,
+    ComposeScale,
 }
 
 pub struct App {
@@ -244,6 +255,7 @@ pub struct App {
     pub(crate) volume_filter: String,
     pub(crate) volume_table_state: ratatui::widgets::TableState,
     pub(crate) project_actions: Vec<ProjectAction>,
+    pub(crate) service_actions: Vec<ServiceAction>,
     pub(crate) output_lines: VecDeque<String>,
     pub(crate) output_capacity: usize,
     pub(crate) container_list_state: ListState,
@@ -251,6 +263,7 @@ pub struct App {
     pub(crate) network_list_state: ListState,
     pub(crate) volume_list_state: ListState,
     pub(crate) project_list_state: ListState,
+    pub(crate) service_list_state: ListState,
     pub(crate) compose_project_table_state: ratatui::widgets::TableState,
     pub(crate) compose_service_list_state: ratatui::widgets::TableState,
     pub(crate) compose_projects: Vec<ComposeProject>,
@@ -379,6 +392,14 @@ impl App {
                 ProjectAction::ComposeConfig,
                 ProjectAction::RegisterFolder,
             ],
+            service_actions: vec![
+                ServiceAction::Start,
+                ServiceAction::Stop,
+                ServiceAction::Restart,
+                ServiceAction::Logs,
+                ServiceAction::Recreate,
+                ServiceAction::Scale,
+            ],
             output_lines: VecDeque::new(),
             output_capacity: 2_000,
             container_list_state: ListState::default(),
@@ -386,6 +407,7 @@ impl App {
             network_list_state: ListState::default(),
             volume_list_state: ListState::default(),
             project_list_state: ListState::default(),
+            service_list_state: ListState::default(),
             compose_project_table_state: ratatui::widgets::TableState::default(),
             compose_service_list_state: ratatui::widgets::TableState::default(),
             compose_projects: Vec::new(),
@@ -1693,6 +1715,14 @@ impl App {
                         &mut self.compose_project_table_state,
                         self.compose_projects.len(),
                     )
+                } else if let Some(project_index) = self.compose_project_table_state.selected()
+                    && let Some(project) = self.compose_projects.get(project_index)
+                    && self
+                        .expanded_projects
+                        .contains(&format!("{}:{}", project.context, project.name))
+                    && self.compose_service_list_state.selected().is_some()
+                {
+                    Self::next_in_list(&mut self.service_list_state, self.service_actions.len())
                 } else {
                     Self::next_in_list(&mut self.project_list_state, self.project_actions.len())
                 }
@@ -1748,6 +1778,14 @@ impl App {
                         &mut self.compose_project_table_state,
                         self.compose_projects.len(),
                     )
+                } else if let Some(project_index) = self.compose_project_table_state.selected()
+                    && let Some(project) = self.compose_projects.get(project_index)
+                    && self
+                        .expanded_projects
+                        .contains(&format!("{}:{}", project.context, project.name))
+                    && self.compose_service_list_state.selected().is_some()
+                {
+                    Self::previous_in_list(&mut self.service_list_state, self.service_actions.len())
                 } else {
                     Self::previous_in_list(&mut self.project_list_state, self.project_actions.len())
                 }
@@ -2036,6 +2074,14 @@ impl App {
             PendingAction::ComposeProfileUp => {
                 self.execute_compose(&["compose", "--profile", value, "up", "-d"])
             }
+            PendingAction::ComposeScale => {
+                let project_folder = self.project_folder.clone();
+                self.execute_mutating_command(
+                    CommandSpec::new("docker")
+                        .args(["compose", "up", "-d", "--scale", value])
+                        .current_dir(project_folder),
+                )
+            }
         }
     }
 
@@ -2265,6 +2311,62 @@ impl App {
         }
     }
 
+    fn run_service_action(
+        &mut self,
+        action: &ServiceAction,
+        project: &ComposeProject,
+        service: &crate::docker::compose::ComposeService,
+    ) -> Option<TaskRequest> {
+        let project_folder = self.project_folder.clone();
+        let project_name = project.name.clone();
+        let service_name = service.name.clone();
+
+        match action {
+            ServiceAction::Start => self.execute_mutating_command(
+                CommandSpec::new("docker")
+                    .args(["compose", "-p", &project_name, "start", &service_name])
+                    .current_dir(project_folder),
+            ),
+            ServiceAction::Stop => self.execute_mutating_command(
+                CommandSpec::new("docker")
+                    .args(["compose", "-p", &project_name, "stop", &service_name])
+                    .current_dir(project_folder),
+            ),
+            ServiceAction::Restart => self.execute_mutating_command(
+                CommandSpec::new("docker")
+                    .args(["compose", "-p", &project_name, "restart", &service_name])
+                    .current_dir(project_folder),
+            ),
+            ServiceAction::Logs => {
+                self.unified_log_view.set_filter(unified_logs::LogFilter {
+                    compose_project: Some(project_name.clone()),
+                    compose_service: Some(service_name.clone()),
+                    ..Default::default()
+                });
+                self.current_tab = Tab::UnifiedLogs;
+                self.focus_target = FocusTarget::Table;
+                self.mark_dirty();
+                None
+            }
+            ServiceAction::Recreate => self.execute_mutating_command(
+                CommandSpec::new("docker")
+                    .args([
+                        "compose",
+                        "-p",
+                        &project_name,
+                        "up",
+                        "-d",
+                        "--force-recreate",
+                        &service_name,
+                    ])
+                    .current_dir(project_folder),
+            ),
+            ServiceAction::Scale => {
+                self.start_input("Replica count (e.g., web=3):", PendingAction::ComposeScale)
+            }
+        }
+    }
+
     pub fn execute_selected(&mut self) -> Option<TaskRequest> {
         match self.current_tab {
             Tab::Dashboard | Tab::UnifiedLogs => None,
@@ -2363,8 +2465,30 @@ impl App {
                             context: self.docker_context.clone(),
                         });
                     }
+                    if let Some(project_index) = self.compose_project_table_state.selected()
+                        && let Some(project) = self.compose_projects.get(project_index)
+                        && self
+                            .expanded_projects
+                            .contains(&format!("{}:{}", project.context, project.name))
+                        && let Some(service_index) = self.compose_service_list_state.selected()
+                        && let Some(_service) = project.services.get(service_index)
+                    {
+                        return None;
+                    }
                     self.toggle_project_expanded();
                     return None;
+                }
+                if let Some(project_index) = self.compose_project_table_state.selected()
+                    && let Some(project) = self.compose_projects.get(project_index).cloned()
+                    && self
+                        .expanded_projects
+                        .contains(&format!("{}:{}", project.context, project.name))
+                    && let Some(service_index) = self.compose_service_list_state.selected()
+                    && let Some(service) = project.services.get(service_index).cloned()
+                    && let Some(i) = self.service_list_state.selected()
+                    && let Some(action) = self.service_actions.get(i).cloned()
+                {
+                    return self.run_service_action(&action, &project, &service);
                 }
                 if let Some(i) = self.project_list_state.selected()
                     && let Some(action) = self.project_actions.get(i).cloned()
