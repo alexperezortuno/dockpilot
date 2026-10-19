@@ -16,4 +16,4 @@ Integration tests must use temporary, clearly named resources and clean them up.
 
 Unified Logs unit coverage includes combined filters, stable ordering, bounded viewport caching, search navigation state, follow/pause state, buffer eviction, fragmented UTF-8 lines, line-size limits, TXT/JSONL export, and invalid timestamps. The Docker integration suite should be extended with temporary containers that emit stdout/stderr fragments and a Compose project when a reachable Engine is available.
 
-Compose workspace unit coverage includes official-label grouping, Docker-context identity, multiple replicas, stopped containers, local folders with spaces, expansion, health/no-healthcheck rendering, and selection preservation. Discovery is read-only and inspects only containers in the active Engine context.
+Compose workspace unit coverage includes official-label grouping, Docker-context identity, multiple replicas, stopped containers, local folders with spaces, expansion, aggregate health/no-healthcheck rendering, restart totals, uptime formatting, and selection preservation. Discovery is read-only and inspects only containers in the active Engine context.
