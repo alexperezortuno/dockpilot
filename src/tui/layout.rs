@@ -23,7 +23,7 @@ pub fn areas(area: Rect, input_visible: bool, show_output: bool, compact: bool) 
         .direction(Direction::Vertical)
         .constraints(if compact {
             vec![
-                Constraint::Length(2),
+                Constraint::Length(3),
                 Constraint::Min(1),
                 Constraint::Length(1),
             ]
@@ -76,5 +76,11 @@ mod tests {
         let hidden = areas(area, false, false, false);
         assert!(hidden.content.height > visible.content.height);
         assert_eq!(hidden.output.height, 0);
+    }
+
+    #[test]
+    fn compact_header_keeps_one_line_for_tabs() {
+        let layout = areas(Rect::new(0, 0, 40, 12), false, false, true);
+        assert_eq!(layout.header.height, 3);
     }
 }

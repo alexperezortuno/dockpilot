@@ -6,6 +6,7 @@ use crate::{
             ContainerLifecycle, ContainerRow, DashboardData, HealthSnapshot, ImageRow, NetworkRow,
             VolumeRow,
         },
+        compose::ComposeProject,
     },
     security::{Mutation, SafetyPolicy},
     system::SystemSnapshot,
@@ -13,13 +14,14 @@ use crate::{
 };
 use ratatui::widgets::ListState;
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     path::PathBuf,
 };
 
 #[allow(dead_code)]
 pub mod alerts;
 pub mod commands;
+pub mod exec;
 #[allow(dead_code)]
 pub mod health;
 #[allow(dead_code)]
@@ -32,6 +34,8 @@ mod output;
 pub mod search;
 #[allow(dead_code)]
 pub mod task_history;
+#[allow(dead_code)]
+pub mod unified_logs;
 
 const MAX_LOG_LINES: usize = 2_000;
 const MAX_EVENT_LINES: usize = 500;
@@ -89,10 +93,21 @@ pub enum VolumeAction {
 #[derive(Debug, Clone)]
 pub enum ProjectAction {
     SetFolder,
+    RegisterFolder,
     ComposeUp,
     ComposeUpProfile,
     ComposeDown,
     ComposeConfig,
+}
+
+#[derive(Debug, Clone)]
+pub enum ServiceAction {
+    Start,
+    Stop,
+    Restart,
+    Logs,
+    Recreate,
+    Scale,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,12 +127,14 @@ pub enum ContextAction {
     Logs,
     Remove,
     History,
+    Exec,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Tab {
     Dashboard,
     Container,
+    UnifiedLogs,
     Image,
     Network,
     Volume,
@@ -135,9 +152,21 @@ pub enum FocusTarget {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Overlay {
     None,
-    Palette { query: String, selected: usize },
+    Palette {
+        query: String,
+        selected: usize,
+    },
     Search(search::SearchState),
-    Context { selected: usize },
+    UnifiedLogSearch,
+    UnifiedLogFilter,
+    Context {
+        selected: usize,
+    },
+    ExecCommand {
+        container_id: String,
+        container_name: String,
+        selected: usize,
+    },
 }
 
 impl FocusTarget {
@@ -181,6 +210,7 @@ pub enum PendingAction {
     VolumeFilter,
     ContainerRestart,
     LogFilter,
+    ContainerExecCustom { id: String, name: String },
     // Image
     ImageRemove,
     ImagePush,
@@ -198,15 +228,19 @@ pub enum PendingAction {
     VolumeRemove,
     VolumeBackup,
     VolumeRestore,
+    UnifiedLogsExportTxt { filtered: bool },
+    UnifiedLogsExportJsonl { filtered: bool },
     // Project
     ProjectSetFolder,
+    RegisterComposeFolder,
     ComposeProfileUp,
+    ComposeScale,
 }
 
 pub struct App {
     pub(crate) current_tab: Tab,
     pub(crate) focus_target: FocusTarget,
-    resource_focus: [FocusTarget; 4],
+    resource_focus: [FocusTarget; 5],
     pub(crate) container_actions: Vec<ContainerAction>,
     pub(crate) image_actions: Vec<ImageAction>,
     pub(crate) images: Vec<ImageRow>,
@@ -221,6 +255,7 @@ pub struct App {
     pub(crate) volume_filter: String,
     pub(crate) volume_table_state: ratatui::widgets::TableState,
     pub(crate) project_actions: Vec<ProjectAction>,
+    pub(crate) service_actions: Vec<ServiceAction>,
     pub(crate) output_lines: VecDeque<String>,
     pub(crate) output_capacity: usize,
     pub(crate) container_list_state: ListState,
@@ -228,13 +263,23 @@ pub struct App {
     pub(crate) network_list_state: ListState,
     pub(crate) volume_list_state: ListState,
     pub(crate) project_list_state: ListState,
+    pub(crate) service_list_state: ListState,
+    pub(crate) compose_project_table_state: ratatui::widgets::TableState,
+    pub(crate) compose_service_list_state: ratatui::widgets::TableState,
+    pub(crate) compose_projects: Vec<ComposeProject>,
+    compose_engine_projects: Vec<ComposeProject>,
+    compose_local_projects: Vec<ComposeProject>,
+    pub(crate) expanded_projects: HashSet<String>,
     pub(crate) output_scroll: usize,
     pub(crate) project_folder: String,
     pub(crate) engine_status: String,
+    pub(crate) docker_context: String,
     pub(crate) task_status: String,
     pub(crate) theme: ThemeName,
     pub(crate) dashboard: Option<DashboardData>,
     pub(crate) log_lines: VecDeque<String>,
+    pub(crate) unified_log_buffer: unified_logs::LogBuffer,
+    pub(crate) unified_log_view: unified_logs::LogViewState,
     pub(crate) log_filter: String,
     pub(crate) log_level_filter: Option<logs::LogLevel>,
     pub(crate) log_timestamps: bool,
@@ -265,6 +310,8 @@ pub struct App {
     pub(crate) mouse_enabled: bool,
     pub(crate) refresh_status: String,
     refresh_failures: HashMap<String, u32>,
+    pub exec: Option<exec::ExecView>,
+    pub(crate) pending_unified_export: Option<(String, bool, bool)>,
     dirty: bool,
 }
 
@@ -282,6 +329,7 @@ impl App {
             focus_target: FocusTarget::Table,
             resource_focus: [
                 FocusTarget::Table,
+                FocusTarget::Actions,
                 FocusTarget::Actions,
                 FocusTarget::Actions,
                 FocusTarget::Actions,
@@ -342,6 +390,15 @@ impl App {
                 ProjectAction::ComposeUpProfile,
                 ProjectAction::ComposeDown,
                 ProjectAction::ComposeConfig,
+                ProjectAction::RegisterFolder,
+            ],
+            service_actions: vec![
+                ServiceAction::Start,
+                ServiceAction::Stop,
+                ServiceAction::Restart,
+                ServiceAction::Logs,
+                ServiceAction::Recreate,
+                ServiceAction::Scale,
             ],
             output_lines: VecDeque::new(),
             output_capacity: 2_000,
@@ -350,13 +407,23 @@ impl App {
             network_list_state: ListState::default(),
             volume_list_state: ListState::default(),
             project_list_state: ListState::default(),
+            service_list_state: ListState::default(),
+            compose_project_table_state: ratatui::widgets::TableState::default(),
+            compose_service_list_state: ratatui::widgets::TableState::default(),
+            compose_projects: Vec::new(),
+            compose_engine_projects: Vec::new(),
+            compose_local_projects: Vec::new(),
+            expanded_projects: HashSet::new(),
             output_scroll: 0,
             project_folder,
             engine_status: "checking Docker Engine".to_string(),
+            docker_context: "default".to_string(),
             task_status: "idle".to_string(),
             theme: ThemeName::Dark,
             dashboard: None,
             log_lines: VecDeque::new(),
+            unified_log_buffer: unified_logs::LogBuffer::new(unified_logs::DEFAULT_CAPACITY),
+            unified_log_view: unified_logs::LogViewState::default(),
             log_filter: String::new(),
             log_level_filter: None,
             log_timestamps: false,
@@ -386,6 +453,8 @@ impl App {
             mouse_enabled: false,
             refresh_status: "auto-refresh on".to_string(),
             refresh_failures: HashMap::new(),
+            exec: None,
+            pending_unified_export: None,
             dirty: true,
         };
 
@@ -394,6 +463,8 @@ impl App {
         app.network_list_state.select(Some(0));
         app.volume_list_state.select(Some(0));
         app.project_list_state.select(Some(0));
+        app.compose_project_table_state.select(Some(0));
+        app.compose_service_list_state.select(Some(0));
 
         app
     }
@@ -446,6 +517,96 @@ impl App {
         let selected = self.selected_resource_id(ResourceKind::Container);
         self.containers = containers;
         self.restore_selection(&selected, ResourceKind::Container);
+        self.mark_dirty();
+    }
+
+    pub fn set_compose_projects(&mut self, projects: Vec<ComposeProject>) {
+        let selected = self
+            .compose_project_table_state
+            .selected()
+            .and_then(|index| self.compose_projects.get(index))
+            .map(|project| {
+                (
+                    project.context.clone(),
+                    project.name.clone(),
+                    project.source.clone(),
+                )
+            });
+        self.compose_engine_projects = projects;
+        self.compose_projects = self.compose_engine_projects.clone();
+        for project in &self.compose_local_projects {
+            if !self.compose_projects.iter().any(|current| {
+                current.context == project.context
+                    && current.name == project.name
+                    && current.source == project.source
+            }) {
+                self.compose_projects.push(project.clone());
+            }
+        }
+        let index = selected.and_then(|identity| {
+            self.compose_projects.iter().position(|project| {
+                project.context == identity.0
+                    && project.name == identity.1
+                    && project.source == identity.2
+            })
+        });
+        self.compose_project_table_state
+            .select(index.or((!self.compose_projects.is_empty()).then_some(0)));
+        self.compose_service_list_state.select(Some(0));
+        self.mark_dirty();
+    }
+
+    pub fn register_compose_folder(&mut self, path: impl Into<PathBuf>) {
+        let path = path.into();
+        let has_compose_file = [
+            "compose.yaml",
+            "compose.yml",
+            "docker-compose.yaml",
+            "docker-compose.yml",
+        ]
+        .iter()
+        .any(|file| path.join(file).is_file());
+        if !path.is_dir() || !has_compose_file {
+            self.push_output(format!(
+                "[project] no Compose file found in {}",
+                path.display()
+            ));
+            return;
+        }
+        let name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("compose-project");
+        let project = crate::docker::compose::registered_project(
+            &self.docker_context,
+            path.to_string_lossy().to_string(),
+            name,
+        );
+        if !self
+            .compose_local_projects
+            .iter()
+            .any(|current| current.source == project.source)
+        {
+            self.compose_local_projects.push(project);
+            self.set_compose_projects(self.compose_engine_projects.clone());
+            self.push_output(format!(
+                "[project] registered Compose folder: {}",
+                path.display()
+            ));
+        }
+    }
+
+    pub fn toggle_project_expanded(&mut self) {
+        let Some(index) = self.compose_project_table_state.selected() else {
+            return;
+        };
+        let Some(project) = self.compose_projects.get(index) else {
+            return;
+        };
+        let key = format!("{}:{}", project.context, project.name);
+        if !self.expanded_projects.insert(key.clone()) {
+            self.expanded_projects.remove(&key);
+        }
         self.mark_dirty();
     }
 
@@ -517,6 +678,7 @@ impl App {
             Tab::Image => Some(1),
             Tab::Network => Some(2),
             Tab::Volume => Some(3),
+            Tab::Project => Some(4),
             _ => None,
         }
     }
@@ -532,6 +694,7 @@ impl App {
         if let Some(index) = Self::resource_focus_index(&self.current_tab) {
             self.resource_focus[index] = target;
         }
+        self.mark_dirty();
     }
 
     pub fn focus_next(&mut self) {
@@ -672,7 +835,11 @@ impl App {
                 };
                 let mut actions = vec![ContextAction::Inspect, ContextAction::Logs];
                 if container.state.eq_ignore_ascii_case("running") {
-                    actions.extend([ContextAction::Stop, ContextAction::Restart]);
+                    actions.extend([
+                        ContextAction::Exec,
+                        ContextAction::Stop,
+                        ContextAction::Restart,
+                    ]);
                 } else {
                     actions.push(ContextAction::Start);
                 }
@@ -694,6 +861,12 @@ impl App {
 
     pub fn context_request(&mut self, action: ContextAction) -> Option<TaskRequest> {
         let request = match (self.current_tab.clone(), action) {
+            (Tab::Container, ContextAction::Exec) => {
+                let container = self.selected_container_row()?;
+                self.start_exec_chooser(container.id, container.name);
+                // Keep the chooser overlay instead of clearing it below.
+                return None;
+            }
             (Tab::Container, ContextAction::Inspect) => self
                 .selected_container_id()
                 .map(|id| TaskRequest::InspectContainer { id }),
@@ -843,6 +1016,10 @@ impl App {
         self.mark_dirty();
     }
 
+    pub fn set_docker_context(&mut self, context: impl Into<String>) {
+        self.docker_context = context.into();
+    }
+
     pub fn set_task_status(&mut self, status: impl Into<String>) {
         self.task_status = status.into();
         self.mark_dirty();
@@ -985,7 +1162,9 @@ impl App {
         if !matches!(self.overlay, Overlay::Search(_))
             && !matches!(
                 entry.id,
-                commands::CommandId::Filter | commands::CommandId::ContextActions
+                commands::CommandId::Filter
+                    | commands::CommandId::ContextActions
+                    | commands::CommandId::ExecShell
             )
         {
             self.overlay = Overlay::None;
@@ -1011,7 +1190,11 @@ impl App {
             return None;
         };
         let action = self.context_actions().get(selected).copied()?;
-        self.context_request(action)
+        let request = self.context_request(action);
+        if !matches!(action, ContextAction::Exec) {
+            self.overlay = Overlay::None;
+        }
+        request
     }
 
     pub fn focus_label(&self) -> &'static str {
@@ -1046,6 +1229,11 @@ impl App {
             .map(|container| container.id.clone())
     }
 
+    pub fn selected_container_row(&self) -> Option<ContainerRow> {
+        let index = self.container_table_state.selected()?;
+        self.filtered_containers().get(index).cloned()
+    }
+
     pub fn dashboard_request(&self) -> TaskRequest {
         TaskRequest::Dashboard {
             selected_id: self.selected_container_id(),
@@ -1059,7 +1247,76 @@ impl App {
             Tab::Image => Some(TaskRequest::ListImages),
             Tab::Network => Some(TaskRequest::ListNetworks),
             Tab::Volume => Some(TaskRequest::ListVolumes),
-            Tab::Project | Tab::System | Tab::Help => None,
+            Tab::Project => Some(TaskRequest::ListComposeProjects {
+                context: self.docker_context.clone(),
+            }),
+            Tab::UnifiedLogs | Tab::System | Tab::Help => None,
+        }
+    }
+
+    // --- Exec sessions ---
+    pub const EXEC_CHOICES: [&'static str; 3] = ["/bin/sh", "/bin/bash", "custom command"];
+
+    pub fn open_exec(&mut self, session: crate::docker::exec::ExecSession, rows: u16, cols: u16) {
+        self.exec = Some(exec::ExecView::new(session, rows, cols));
+        self.mark_dirty();
+    }
+
+    pub fn close_exec(&mut self) {
+        self.exec = None;
+        self.mark_dirty();
+    }
+
+    pub fn exec_active(&self) -> bool {
+        self.exec.is_some()
+    }
+
+    pub fn start_exec_chooser(&mut self, container_id: String, container_name: String) {
+        self.overlay = Overlay::ExecCommand {
+            container_id,
+            container_name,
+            selected: 0,
+        };
+        self.mark_dirty();
+    }
+
+    pub fn exec_choice_move(&mut self, delta: i32) {
+        let Overlay::ExecCommand { selected, .. } = &mut self.overlay else {
+            return;
+        };
+        *selected =
+            ((*selected as i32 + delta).rem_euclid(Self::EXEC_CHOICES.len() as i32)) as usize;
+    }
+
+    /// Enter on the exec chooser: shells produce a request; "custom" asks for a command.
+    pub fn exec_choice_selected(&mut self) -> Option<TaskRequest> {
+        let Overlay::ExecCommand {
+            container_id,
+            container_name,
+            selected,
+        } = self.overlay.clone()
+        else {
+            return None;
+        };
+        self.overlay = Overlay::None;
+        match selected {
+            0 => Some(TaskRequest::OpenExec {
+                id: container_id,
+                name: container_name,
+                command: crate::docker::exec::ExecCommand::Sh,
+            }),
+            1 => Some(TaskRequest::OpenExec {
+                id: container_id,
+                name: container_name,
+                command: crate::docker::exec::ExecCommand::Bash,
+            }),
+            _ => self.start_input(
+                "Command to run inside the container:",
+                PendingAction::ContainerExecCustom {
+                    id: container_id,
+                    name: container_name,
+                },
+            ),
         }
     }
 
@@ -1072,6 +1329,248 @@ impl App {
         }
         self.log_lines.push_back(line);
         self.mark_dirty();
+    }
+
+    pub fn push_unified_log_event(&mut self, event: unified_logs::LogEvent) {
+        self.unified_log_buffer.push(event);
+        if self.unified_log_view.follow && !self.unified_log_view.paused {
+            self.unified_log_view.selected_sequence = self
+                .unified_log_buffer
+                .all()
+                .last()
+                .map(|event| event.sequence);
+        }
+        self.mark_dirty();
+    }
+
+    pub fn unified_logs_refresh_view(&mut self) {
+        self.unified_log_view
+            .refresh_cache(&self.unified_log_buffer);
+    }
+
+    pub fn unified_logs_start_search(&mut self) {
+        self.unified_log_view.search_active = true;
+        self.unified_log_view.search_query.clear();
+        self.unified_logs_refresh_view();
+        self.overlay = Overlay::UnifiedLogSearch;
+    }
+
+    pub fn unified_logs_search_push(&mut self, character: char) {
+        self.unified_log_view.search_query.push(character);
+        self.unified_logs_refresh_view();
+        self.unified_log_view.search_hits = unified_logs::search_indices_by_sequence(
+            &self.unified_log_buffer,
+            &self.unified_log_view.cached_sequences,
+            &self.unified_log_view.search_query,
+        );
+        if let Some(sequence) = self.unified_log_view.search_hits.first() {
+            self.unified_log_view.selected_sequence = Some(*sequence);
+        }
+        self.mark_dirty();
+    }
+
+    pub fn unified_logs_search_backspace(&mut self) {
+        self.unified_log_view.search_query.pop();
+        self.unified_logs_search_push_noop();
+    }
+
+    fn unified_logs_search_push_noop(&mut self) {
+        self.unified_logs_refresh_view();
+        self.unified_log_view.search_hits = unified_logs::search_indices_by_sequence(
+            &self.unified_log_buffer,
+            &self.unified_log_view.cached_sequences,
+            &self.unified_log_view.search_query,
+        );
+        self.unified_log_view.search_cursor = 0;
+        if let Some(sequence) = self.unified_log_view.search_hits.first() {
+            self.unified_log_view.selected_sequence = Some(*sequence);
+        }
+        self.mark_dirty();
+    }
+
+    pub fn unified_logs_close_search(&mut self) {
+        self.unified_log_view.search_active = false;
+        self.unified_log_view.search_query.clear();
+        self.mark_dirty();
+    }
+
+    pub fn unified_logs_next_match(&mut self, reverse: bool) {
+        let hits = &self.unified_log_view.search_hits;
+        if hits.is_empty() {
+            return;
+        }
+        let count = hits.len();
+        self.unified_log_view.search_cursor = if reverse {
+            (self.unified_log_view.search_cursor + count - 1) % count
+        } else {
+            (self.unified_log_view.search_cursor + 1) % count
+        };
+        self.unified_log_view.selected_sequence = Some(hits[self.unified_log_view.search_cursor]);
+        self.mark_dirty();
+    }
+
+    pub fn unified_logs_move(&mut self, delta: i32) {
+        self.unified_logs_refresh_view();
+        if self.unified_log_view.cached_sequences.is_empty() {
+            return;
+        }
+        let current = self
+            .unified_log_view
+            .selected_sequence
+            .and_then(|selected| {
+                self.unified_log_view
+                    .cached_sequences
+                    .iter()
+                    .position(|sequence| *sequence == selected)
+            })
+            .unwrap_or(0);
+        let next = (current as i32 + delta)
+            .clamp(0, self.unified_log_view.cached_sequences.len() as i32 - 1)
+            as usize;
+        self.unified_log_view.selected_sequence =
+            Some(self.unified_log_view.cached_sequences[next]);
+        self.unified_log_view.follow = false;
+        self.mark_dirty();
+    }
+
+    pub fn unified_logs_home(&mut self) {
+        self.unified_logs_refresh_view();
+        self.unified_log_view.selected_sequence =
+            self.unified_log_view.cached_sequences.first().copied();
+        self.unified_log_view.follow = false;
+        self.mark_dirty();
+    }
+
+    pub fn unified_logs_end(&mut self) {
+        self.unified_logs_refresh_view();
+        self.unified_log_view.selected_sequence =
+            self.unified_log_view.cached_sequences.last().copied();
+        self.unified_log_view.follow = true;
+        self.mark_dirty();
+    }
+
+    pub fn unified_logs_toggle_follow(&mut self) {
+        self.unified_log_view.follow = !self.unified_log_view.follow;
+        if self.unified_log_view.follow {
+            self.unified_logs_end();
+        } else {
+            self.mark_dirty();
+        }
+    }
+
+    pub fn unified_logs_toggle_pause(&mut self) {
+        self.unified_log_view.paused = !self.unified_log_view.paused;
+        self.mark_dirty();
+    }
+
+    pub fn unified_logs_cycle_filter(&mut self) {
+        self.unified_log_view.filter_field = self.unified_log_view.filter_field.next();
+        self.unified_log_view.filter_editing = true;
+        self.unified_log_view.filter_input.clear();
+        self.overlay = Overlay::UnifiedLogFilter;
+        self.mark_dirty();
+    }
+
+    pub fn unified_logs_filter_push(&mut self, character: char) {
+        self.unified_log_view.filter_input.push(character);
+        self.mark_dirty();
+    }
+
+    pub fn unified_logs_filter_backspace(&mut self) {
+        self.unified_log_view.filter_input.pop();
+        self.mark_dirty();
+    }
+
+    pub fn unified_logs_filter_confirm(&mut self) {
+        let value = (!self.unified_log_view.filter_input.is_empty())
+            .then(|| self.unified_log_view.filter_input.clone());
+        let mut filter = self.unified_log_view.filter.clone();
+        match self.unified_log_view.filter_field {
+            unified_logs::FilterField::Container => filter.container = value,
+            unified_logs::FilterField::ComposeProject => filter.compose_project = value,
+            unified_logs::FilterField::ComposeService => filter.compose_service = value,
+            unified_logs::FilterField::Severity => {
+                filter.minimum_severity = self.unified_log_view.filter_input.parse().ok()
+            }
+            unified_logs::FilterField::Since => filter.since = value,
+            unified_logs::FilterField::Until => filter.until = value,
+            unified_logs::FilterField::Text => filter.text = value,
+        }
+        self.unified_log_view.set_filter(filter);
+        self.unified_log_view.filter_editing = false;
+        self.unified_logs_refresh_view();
+        self.mark_dirty();
+    }
+
+    pub fn unified_logs_export(&mut self, path: &str, jsonl: bool, filtered: bool) {
+        if PathBuf::from(path).exists() {
+            self.pending_unified_export = Some((path.to_string(), jsonl, filtered));
+            self.notify(
+                notifications::NotificationKind::Warning,
+                "Export path exists; press y to overwrite or n to cancel",
+                true,
+            );
+            return;
+        }
+        self.write_unified_logs_export(path, jsonl, filtered, false);
+    }
+
+    fn write_unified_logs_export(
+        &mut self,
+        path: &str,
+        jsonl: bool,
+        filtered: bool,
+        overwrite: bool,
+    ) {
+        self.unified_logs_refresh_view();
+        let events = if filtered {
+            self.unified_log_view
+                .cached_sequences
+                .iter()
+                .filter_map(|sequence| self.unified_log_buffer.get(*sequence))
+                .collect::<Vec<_>>()
+        } else {
+            self.unified_log_buffer.all().collect::<Vec<_>>()
+        };
+        let path = PathBuf::from(path);
+        let result = if jsonl {
+            unified_logs::export_jsonl(&path, &events, overwrite)
+        } else {
+            unified_logs::export_txt(&path, &events, overwrite)
+        };
+        match result {
+            Ok(()) => self.push_output(format!(
+                "[logs] exported {} events to {}",
+                events.len(),
+                path.display()
+            )),
+            Err(error) => self.push_output(format!("[logs] export failed: {}", error)),
+        }
+    }
+
+    pub fn unified_logs_confirm_export(&mut self) {
+        if let Some((path, jsonl, filtered)) = self.pending_unified_export.take() {
+            self.write_unified_logs_export(&path, jsonl, filtered, true);
+        }
+    }
+
+    pub fn unified_logs_cancel_export(&mut self) {
+        self.pending_unified_export = None;
+    }
+
+    pub fn unified_logs_start_export(&mut self, jsonl: bool, filtered: bool) {
+        self.start_input(
+            if jsonl {
+                "JSONL export path:"
+            } else {
+                "TXT export path:"
+            },
+            if jsonl {
+                PendingAction::UnifiedLogsExportJsonl { filtered }
+            } else {
+                PendingAction::UnifiedLogsExportTxt { filtered }
+            },
+        );
     }
 
     pub fn toggle_logs_paused(&mut self) {
@@ -1174,7 +1673,7 @@ impl App {
 
     pub fn next(&mut self) {
         match self.current_tab {
-            Tab::Dashboard => {}
+            Tab::Dashboard | Tab::UnifiedLogs => {}
             Tab::Container => {
                 if self.focus_target == FocusTarget::Table {
                     let len = self.filtered_containers().len();
@@ -1211,7 +1710,22 @@ impl App {
                 }
             }
             Tab::Project => {
-                Self::next_in_list(&mut self.project_list_state, self.project_actions.len())
+                if self.focus_target == FocusTarget::Table {
+                    Self::next_in_table(
+                        &mut self.compose_project_table_state,
+                        self.compose_projects.len(),
+                    )
+                } else if let Some(project_index) = self.compose_project_table_state.selected()
+                    && let Some(project) = self.compose_projects.get(project_index)
+                    && self
+                        .expanded_projects
+                        .contains(&format!("{}:{}", project.context, project.name))
+                    && self.compose_service_list_state.selected().is_some()
+                {
+                    Self::next_in_list(&mut self.service_list_state, self.service_actions.len())
+                } else {
+                    Self::next_in_list(&mut self.project_list_state, self.project_actions.len())
+                }
             }
             Tab::System | Tab::Help => {}
         }
@@ -1219,7 +1733,7 @@ impl App {
 
     pub fn previous(&mut self) {
         match self.current_tab {
-            Tab::Dashboard => {}
+            Tab::Dashboard | Tab::UnifiedLogs => {}
             Tab::Container => {
                 if self.focus_target == FocusTarget::Table {
                     let len = self.filtered_containers().len();
@@ -1259,7 +1773,22 @@ impl App {
                 }
             }
             Tab::Project => {
-                Self::previous_in_list(&mut self.project_list_state, self.project_actions.len())
+                if self.focus_target == FocusTarget::Table {
+                    Self::previous_in_table(
+                        &mut self.compose_project_table_state,
+                        self.compose_projects.len(),
+                    )
+                } else if let Some(project_index) = self.compose_project_table_state.selected()
+                    && let Some(project) = self.compose_projects.get(project_index)
+                    && self
+                        .expanded_projects
+                        .contains(&format!("{}:{}", project.context, project.name))
+                    && self.compose_service_list_state.selected().is_some()
+                {
+                    Self::previous_in_list(&mut self.service_list_state, self.service_actions.len())
+                } else {
+                    Self::previous_in_list(&mut self.project_list_state, self.project_actions.len())
+                }
             }
             Tab::System | Tab::Help => {}
         }
@@ -1268,7 +1797,8 @@ impl App {
     pub fn next_tab(&mut self) {
         self.current_tab = match self.current_tab {
             Tab::Dashboard => Tab::Container,
-            Tab::Container => Tab::Image,
+            Tab::Container => Tab::UnifiedLogs,
+            Tab::UnifiedLogs => Tab::Image,
             Tab::Image => Tab::Network,
             Tab::Network => Tab::Volume,
             Tab::Volume => Tab::Project,
@@ -1283,6 +1813,7 @@ impl App {
         self.current_tab = match self.current_tab {
             Tab::Dashboard => Tab::Help,
             Tab::Container => Tab::Dashboard,
+            Tab::UnifiedLogs => Tab::Container,
             Tab::Image => Tab::Container,
             Tab::Network => Tab::Image,
             Tab::Volume => Tab::Network,
@@ -1295,6 +1826,11 @@ impl App {
 
     pub fn show_help(&mut self) {
         self.current_tab = Tab::Help;
+        self.sync_focus_target();
+    }
+
+    pub fn show_unified_logs(&mut self) {
+        self.current_tab = Tab::UnifiedLogs;
         self.sync_focus_target();
     }
 
@@ -1436,6 +1972,27 @@ impl App {
                 self.log_filter = value.to_string();
                 None
             }
+            PendingAction::UnifiedLogsExportTxt { filtered } => {
+                self.unified_logs_export(value, false, filtered);
+                None
+            }
+            PendingAction::UnifiedLogsExportJsonl { filtered } => {
+                self.unified_logs_export(value, true, filtered);
+                None
+            }
+            PendingAction::ContainerExecCustom { id, name } => {
+                match crate::docker::exec::split_exec_args(value) {
+                    Ok(argv) => Some(TaskRequest::OpenExec {
+                        id,
+                        name,
+                        command: crate::docker::exec::ExecCommand::Custom(argv),
+                    }),
+                    Err(error) => {
+                        self.push_output(format!("[exec] invalid command: {}", error));
+                        None
+                    }
+                }
+            }
             // Image
             PendingAction::ImageRemove => self
                 .execute_destructive_command(CommandSpec::new("docker").args(["rmi"]).arg(value)),
@@ -1510,8 +2067,20 @@ impl App {
                 self.push_output(format!("[project] folder set: {}", folder));
                 self.execute_command(CommandSpec::new("ls").args(["-la"]).arg(folder))
             }
+            PendingAction::RegisterComposeFolder => {
+                self.register_compose_folder(PathBuf::from(value));
+                None
+            }
             PendingAction::ComposeProfileUp => {
                 self.execute_compose(&["compose", "--profile", value, "up", "-d"])
+            }
+            PendingAction::ComposeScale => {
+                let project_folder = self.project_folder.clone();
+                self.execute_mutating_command(
+                    CommandSpec::new("docker")
+                        .args(["compose", "up", "-d", "--scale", value])
+                        .current_dir(project_folder),
+                )
             }
         }
     }
@@ -1729,6 +2298,10 @@ impl App {
             ProjectAction::SetFolder => {
                 self.start_input("Project folder path:", PendingAction::ProjectSetFolder)
             }
+            ProjectAction::RegisterFolder => self.start_input(
+                "Compose folder to register:",
+                PendingAction::RegisterComposeFolder,
+            ),
             ProjectAction::ComposeUp => self.execute_compose(&["compose", "up", "-d"]),
             ProjectAction::ComposeUpProfile => {
                 self.start_input("Compose profile:", PendingAction::ComposeProfileUp)
@@ -1738,9 +2311,65 @@ impl App {
         }
     }
 
+    fn run_service_action(
+        &mut self,
+        action: &ServiceAction,
+        project: &ComposeProject,
+        service: &crate::docker::compose::ComposeService,
+    ) -> Option<TaskRequest> {
+        let project_folder = self.project_folder.clone();
+        let project_name = project.name.clone();
+        let service_name = service.name.clone();
+
+        match action {
+            ServiceAction::Start => self.execute_mutating_command(
+                CommandSpec::new("docker")
+                    .args(["compose", "-p", &project_name, "start", &service_name])
+                    .current_dir(project_folder),
+            ),
+            ServiceAction::Stop => self.execute_mutating_command(
+                CommandSpec::new("docker")
+                    .args(["compose", "-p", &project_name, "stop", &service_name])
+                    .current_dir(project_folder),
+            ),
+            ServiceAction::Restart => self.execute_mutating_command(
+                CommandSpec::new("docker")
+                    .args(["compose", "-p", &project_name, "restart", &service_name])
+                    .current_dir(project_folder),
+            ),
+            ServiceAction::Logs => {
+                self.unified_log_view.set_filter(unified_logs::LogFilter {
+                    compose_project: Some(project_name.clone()),
+                    compose_service: Some(service_name.clone()),
+                    ..Default::default()
+                });
+                self.current_tab = Tab::UnifiedLogs;
+                self.focus_target = FocusTarget::Table;
+                self.mark_dirty();
+                None
+            }
+            ServiceAction::Recreate => self.execute_mutating_command(
+                CommandSpec::new("docker")
+                    .args([
+                        "compose",
+                        "-p",
+                        &project_name,
+                        "up",
+                        "-d",
+                        "--force-recreate",
+                        &service_name,
+                    ])
+                    .current_dir(project_folder),
+            ),
+            ServiceAction::Scale => {
+                self.start_input("Replica count (e.g., web=3):", PendingAction::ComposeScale)
+            }
+        }
+    }
+
     pub fn execute_selected(&mut self) -> Option<TaskRequest> {
         match self.current_tab {
-            Tab::Dashboard => None,
+            Tab::Dashboard | Tab::UnifiedLogs => None,
             Tab::Container => {
                 if self.focus_target == FocusTarget::Table {
                     let containers = self.filtered_containers();
@@ -1821,6 +2450,46 @@ impl App {
                 None
             }
             Tab::Project => {
+                if self.focus_target == FocusTarget::Table {
+                    if self.compose_projects.is_empty() {
+                        if self
+                            .project_list_state
+                            .selected()
+                            .is_some_and(|index| index > 0)
+                            && let Some(i) = self.project_list_state.selected()
+                            && let Some(action) = self.project_actions.get(i).cloned()
+                        {
+                            return self.run_project_action(&action);
+                        }
+                        return Some(TaskRequest::ListComposeProjects {
+                            context: self.docker_context.clone(),
+                        });
+                    }
+                    if let Some(project_index) = self.compose_project_table_state.selected()
+                        && let Some(project) = self.compose_projects.get(project_index)
+                        && self
+                            .expanded_projects
+                            .contains(&format!("{}:{}", project.context, project.name))
+                        && let Some(service_index) = self.compose_service_list_state.selected()
+                        && let Some(_service) = project.services.get(service_index)
+                    {
+                        return None;
+                    }
+                    self.toggle_project_expanded();
+                    return None;
+                }
+                if let Some(project_index) = self.compose_project_table_state.selected()
+                    && let Some(project) = self.compose_projects.get(project_index).cloned()
+                    && self
+                        .expanded_projects
+                        .contains(&format!("{}:{}", project.context, project.name))
+                    && let Some(service_index) = self.compose_service_list_state.selected()
+                    && let Some(service) = project.services.get(service_index).cloned()
+                    && let Some(i) = self.service_list_state.selected()
+                    && let Some(action) = self.service_actions.get(i).cloned()
+                {
+                    return self.run_service_action(&action, &project, &service);
+                }
                 if let Some(i) = self.project_list_state.selected()
                     && let Some(action) = self.project_actions.get(i).cloned()
                 {
@@ -2009,6 +2678,18 @@ mod tests {
     }
 
     #[test]
+    fn container_focus_switches_between_table_and_actions() {
+        let mut app = App::new();
+        assert_eq!(app.focus_target, FocusTarget::Table);
+        app.focus_next();
+        assert_eq!(app.focus_target, FocusTarget::Actions);
+        app.focus_next();
+        assert_eq!(app.focus_target, FocusTarget::Table);
+        app.focus_previous();
+        assert_eq!(app.focus_target, FocusTarget::Actions);
+    }
+
+    #[test]
     fn dirty_state_is_consumed_and_changes_invalidate_rendering() {
         let mut app = App::new();
         assert!(app.take_dirty());
@@ -2136,6 +2817,40 @@ mod tests {
     }
 
     #[test]
+    fn registering_a_compose_folder_keeps_spaces_and_marks_it_local() {
+        let path =
+            std::env::temp_dir().join(format!("dockpilot compose folder {}", std::process::id()));
+        std::fs::create_dir_all(&path).expect("temporary Compose folder");
+        std::fs::write(path.join("compose.yaml"), "services: {}\n").expect("compose file");
+
+        let mut app = App::new();
+        app.register_compose_folder(path.clone());
+
+        assert_eq!(app.compose_projects.len(), 1);
+        assert!(matches!(
+            app.compose_projects[0].source,
+            crate::docker::compose::ProjectSource::LocalFile(_)
+        ));
+        assert!(
+            app.compose_projects[0]
+                .name
+                .contains("dockpilot compose folder")
+        );
+        std::fs::remove_dir_all(path).expect("temporary Compose folder cleanup");
+    }
+
+    #[test]
+    fn project_expansion_is_preserved_by_refresh() {
+        let mut app = App::new();
+        let project = crate::docker::compose::registered_project("ctx", "/tmp/backend", "backend");
+        app.set_compose_projects(vec![project.clone()]);
+        app.toggle_project_expanded();
+        assert!(app.expanded_projects.contains("ctx:backend"));
+        app.set_compose_projects(vec![project]);
+        assert!(app.expanded_projects.contains("ctx:backend"));
+    }
+
+    #[test]
     fn image_list_action_requests_bollard_image_listing() {
         let mut app = App::new();
         app.current_tab = Tab::Image;
@@ -2241,11 +2956,11 @@ mod tests {
         let mut app = App::new();
 
         app.next_tab();
-        assert_eq!(app.current_tab, Tab::Image);
+        assert_eq!(app.current_tab, Tab::UnifiedLogs);
         app.previous_tab();
         assert_eq!(app.current_tab, Tab::Container);
 
-        for _ in 0..5 {
+        for _ in 0..6 {
             app.next_tab();
         }
         assert_eq!(app.current_tab, Tab::System);
@@ -2258,6 +2973,8 @@ mod tests {
     #[test]
     fn entering_resource_tabs_requests_only_that_tab() {
         let mut app = App::new();
+        app.next_tab();
+        assert!(app.current_tab_refresh_request().is_none());
         app.next_tab();
         assert_eq!(
             app.current_tab_refresh_request().unwrap().description(),
@@ -2354,6 +3071,27 @@ mod tests {
     }
 
     #[test]
+    fn context_stop_request_uses_selected_container_and_closes_menu() {
+        let mut app = App::new();
+        app.set_containers(vec![ContainerRow {
+            id: "container-id".into(),
+            name: "api".into(),
+            image: "demo".into(),
+            state: "running".into(),
+            status: "Up".into(),
+        }]);
+        app.overlay = Overlay::Context { selected: 3 };
+
+        let request = app.context_request_selected().expect("stop request");
+        assert!(matches!(
+            request,
+            TaskRequest::ContainerLifecycle { id, operation: ContainerLifecycle::Stop }
+                if id == "container-id"
+        ));
+        assert_eq!(app.overlay, Overlay::None);
+    }
+
+    #[test]
     fn context_menu_opens_with_actions_focus_for_the_selected_resource() {
         let mut app = App::new();
         app.set_containers(vec![ContainerRow {
@@ -2368,5 +3106,69 @@ mod tests {
         app.start_context_menu();
 
         assert!(matches!(app.overlay, Overlay::Context { selected: 0 }));
+    }
+
+    #[test]
+    fn exec_is_available_only_for_running_containers() {
+        let mut app = App::new();
+        app.set_containers(vec![ContainerRow {
+            id: "container".into(),
+            name: "api".into(),
+            image: "demo".into(),
+            state: "exited".into(),
+            status: "Exited".into(),
+        }]);
+        assert!(!app.context_actions().contains(&ContextAction::Exec));
+
+        app.set_containers(vec![ContainerRow {
+            id: "container".into(),
+            name: "api".into(),
+            image: "demo".into(),
+            state: "running".into(),
+            status: "Up".into(),
+        }]);
+        assert!(app.context_actions().contains(&ContextAction::Exec));
+    }
+
+    #[test]
+    fn exec_chooser_uses_container_id_and_supports_custom_argv() {
+        let mut app = App::new();
+        app.set_containers(vec![ContainerRow {
+            id: "full-container-id".into(),
+            name: "api".into(),
+            image: "demo".into(),
+            state: "running".into(),
+            status: "Up".into(),
+        }]);
+
+        app.context_request(ContextAction::Exec);
+        assert!(matches!(
+            app.overlay,
+            Overlay::ExecCommand { selected: 0, .. }
+        ));
+
+        app.exec_choice_move(2);
+        app.exec_choice_selected();
+        app.input_buffer = "printf 'hello world'".into();
+        let request = app.confirm_input().expect("custom exec request");
+        assert!(matches!(
+            request,
+            TaskRequest::OpenExec {
+                id,
+                command: crate::docker::exec::ExecCommand::Custom(argv),
+                ..
+            } if id == "full-container-id" && argv == vec!["printf", "hello world"]
+        ));
+    }
+
+    #[test]
+    fn exec_requests_are_mutating_and_read_only_policy_blocks_them() {
+        let request = TaskRequest::OpenExec {
+            id: "container-id".into(),
+            name: "api".into(),
+            command: crate::docker::exec::ExecCommand::Sh,
+        };
+        assert_eq!(request.mutation(), Mutation::Mutating);
+        assert!(!SafetyPolicy::new(false, true).allows(request.mutation()));
     }
 }

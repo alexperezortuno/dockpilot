@@ -33,6 +33,15 @@
 - [x] DS-022: CI, integration tests, documentation and release packaging.
 
 ## UX
+- [x] UX-008.1: Unified Logs TUI filters, search/navigation, cached viewport, follow/pause state, bounded stream line assembly, and TXT/JSONL export controls.
+- [ ] UX-009: Docker Compose workspace.
+  - [x] UX-009A: Engine discovery, context-aware identity, stopped containers, stable selection, expansion, and local Compose folder registration.
+  - [x] UX-009B: Asynchronous status, health, replicas, images, ports, restart totals, and uptime rendering.
+  - [x] UX-009C: Contextual service actions and Compose-aware Unified Logs navigation.
+  - [ ] UX-009D: Resolved Compose dependencies and missing/cyclic dependency states.
+  - [ ] UX-009E: Project/service navigation into the existing Unified Logs view.
+  - [ ] UX-009F: Adaptive Project workspace rendering and explicit project/actions focus are implemented; details/action layout remains.
+  - [ ] UX-009G: Full integration coverage and documentation completion.
 - [x] UX-006: Local system information tab with asynchronous host metrics, resource details, and refresh behavior.
 - [x] UX-001: Responsive layout, explicit focus, contextual details, and adaptive TUI states.
   - Rendering extracted to `src/tui/screens/`.
@@ -52,12 +61,14 @@
   - Background tasks carry a typed origin and suppress successful periodic output/notifications.
   - `r` refreshes manually, `R` toggles auto-refresh, and resource intervals are validated in TOML.
   - Output/details visibility and compact layout can be toggled without changing keyboard navigation.
-- [x] UX-005: UI polish and stability.
+ - [x] UX-005: UI polish and stability.
   - Conditional rendering consumes an application dirty flag; keyboard/task/notification changes invalidate it.
   - Background refresh failures are grouped independently by resource/task description, with one recovery notification.
   - Rotating background scheduling prevents metrics and healthchecks from starving behind list refreshes.
   - Command palette navigation uses arrows; `j` and `k` remain text input, and task duration uses `finished - started`.
-  - Added dirty-render, task duration, independent refresh incident, palette input, identity selection, and terminal-size coverage.
+   - Added dirty-render, task duration, independent refresh incident, palette input, identity selection, and terminal-size coverage.
+- [x] UX-007: Interactive container Exec with Bollard PTY sessions, terminal emulation, resize, detach, bounded scrollback, policy enforcement, cleanup, tests, and documentation.
+- [x] UX-007.1: Harden interactive Exec input backpressure, reliable detach, session lifecycle cleanup, context binding, and terminal recovery coverage.
 
 ## First agent assignment
 Implement DS-001 only. Inspect the repository, run baseline checks where available, and report shell interpolation, blocking subprocess calls, hardcoded parameters, broken output scrolling and Compose working-directory behavior. Do not refactor before reporting findings.

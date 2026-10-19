@@ -1,3 +1,4 @@
+pub mod exec_keys;
 pub mod layout;
 pub mod screens;
 pub mod terminal;
@@ -10,7 +11,8 @@ use crate::config::ThemeName;
 use ratatui::{
     Frame,
     style::{Color, Modifier, Style},
-    widgets::{Block, Borders, Paragraph, Tabs},
+    text::{Line, Span},
+    widgets::{Block, Borders, Paragraph},
 };
 
 #[derive(Clone, Copy)]
@@ -41,48 +43,83 @@ pub(crate) fn palette(theme: ThemeName) -> Palette {
 }
 
 pub fn draw_app(f: &mut Frame, app: &mut App) {
+    let colors = palette(app.theme);
+    if app.exec.is_some() {
+        screens::exec::draw(f, app, f.area(), colors);
+        widgets::toast::draw(f, app, f.area(), colors);
+        return;
+    }
     let layout = areas(
         f.area(),
-        app.input_mode || matches!(app.overlay, crate::app::Overlay::Search(_)),
+        app.input_mode
+            || matches!(
+                app.overlay,
+                crate::app::Overlay::Search(_)
+                    | crate::app::Overlay::UnifiedLogSearch
+                    | crate::app::Overlay::UnifiedLogFilter
+            ),
         app.show_output,
         app.compact_layout,
     );
-    let colors = palette(app.theme);
-    let tab_titles = [
-        "Dashboard",
-        "Container",
-        "Image",
-        "Network",
-        "Volume",
-        "Project",
-        "System",
-        "Help",
-    ];
+    let tab_titles: Vec<&str> = if f.area().width < 60 {
+        vec!["D", "C", "L", "I", "N", "V", "P", "S", "?"]
+    } else if f.area().width < 100 {
+        vec![
+            "Dash", "Cont", "Logs", "Img", "Net", "Vol", "Proj", "Sys", "Help",
+        ]
+    } else {
+        vec![
+            "Dashboard",
+            "Container",
+            "Logs",
+            "Image",
+            "Network",
+            "Volume",
+            "Project",
+            "System",
+            "Help",
+        ]
+    };
     let selected_tab = match app.current_tab {
         Tab::Dashboard => 0,
         Tab::Container => 1,
-        Tab::Image => 2,
-        Tab::Network => 3,
-        Tab::Volume => 4,
-        Tab::Project => 5,
-        Tab::System => 6,
-        Tab::Help => 7,
+        Tab::UnifiedLogs => 2,
+        Tab::Image => 3,
+        Tab::Network => 4,
+        Tab::Volume => 5,
+        Tab::Project => 6,
+        Tab::System => 7,
+        Tab::Help => 8,
     };
 
-    let tabs = Tabs::new(tab_titles)
-        .block(
+    let tab_line = Line::from(
+        tab_titles
+            .iter()
+            .enumerate()
+            .flat_map(|(index, title)| {
+                let separator = (index > 0).then(|| Span::raw(" "));
+                let label = Span::styled(
+                    format!("[{}]", title),
+                    if index == selected_tab {
+                        Style::default()
+                            .fg(colors.accent)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(colors.foreground)
+                    },
+                );
+                separator.into_iter().chain(std::iter::once(label))
+            })
+            .collect::<Vec<_>>(),
+    );
+    f.render_widget(
+        Paragraph::new(tab_line).block(
             Block::default()
                 .borders(Borders::ALL)
                 .title(format!(" Dockpilot | Docker: {} ", app.engine_status)),
-        )
-        .select(selected_tab)
-        .style(Style::default().fg(colors.foreground))
-        .highlight_style(
-            Style::default()
-                .fg(colors.accent)
-                .add_modifier(Modifier::BOLD),
-        );
-    f.render_widget(tabs, layout.header);
+        ),
+        layout.header,
+    );
     f.render_widget(
         Paragraph::new(footer_line(
             app.focus_label(),
@@ -93,12 +130,12 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
 
     match app.current_tab {
         Tab::Dashboard => screens::dashboard::draw(f, app, layout.content),
+        Tab::UnifiedLogs => screens::unified_logs::draw(f, app, layout.content),
         Tab::Container | Tab::Image | Tab::Network | Tab::Volume => {
             screens::resources::draw(f, app, layout.content, colors)
         }
-        Tab::Project | Tab::Help => {
-            screens::resources::draw_actions(f, app, layout.content, colors)
-        }
+        Tab::Project => screens::resources::draw_project(f, app, layout.content, colors),
+        Tab::Help => screens::resources::draw_actions(f, app, layout.content, colors),
         Tab::System => screens::system::draw(f, app, layout.content, colors),
     }
 
@@ -110,13 +147,18 @@ pub fn draw_app(f: &mut Frame, app: &mut App) {
     if app.show_output {
         widgets::output::draw(f, app, layout.output);
     }
-    if matches!(app.overlay, crate::app::Overlay::Search(_))
-        && let Some(area) = layout.input
+    if matches!(
+        app.overlay,
+        crate::app::Overlay::Search(_)
+            | crate::app::Overlay::UnifiedLogSearch
+            | crate::app::Overlay::UnifiedLogFilter
+    ) && let Some(area) = layout.input
     {
         widgets::search_bar::draw(f, app, area);
     }
     widgets::command_palette::draw(f, app, f.area(), colors);
     widgets::context_menu::draw(f, app, f.area(), colors);
+    widgets::context_menu::draw_exec_picker(f, app, f.area(), colors);
     widgets::toast::draw(f, app, f.area(), colors);
 }
 
@@ -148,6 +190,7 @@ mod tests {
             for tab in [
                 Tab::Dashboard,
                 Tab::Container,
+                Tab::UnifiedLogs,
                 Tab::Image,
                 Tab::Network,
                 Tab::Volume,
@@ -159,6 +202,14 @@ mod tests {
                 let _ = render(width, height, &mut app);
             }
         }
+    }
+
+    #[test]
+    fn keeps_tab_menu_visible_on_narrow_terminals() {
+        let mut app = App::new();
+        app.current_tab = Tab::Project;
+        let output = render(40, 12, &mut app);
+        assert!(output.contains("D") && output.contains("P") && output.contains("?"));
     }
 
     #[test]
@@ -283,5 +334,36 @@ mod tests {
         let _ = render(80, 12, &mut app);
 
         assert!(app.output_scroll < 40);
+    }
+
+    #[tokio::test]
+    async fn renders_exec_at_small_terminal_sizes() {
+        for (width, height) in [(20u16, 8u16), (40, 12), (80, 24)] {
+            let client = bollard::Docker::connect_with_http(
+                "http://127.0.0.1:9",
+                1,
+                bollard::API_DEFAULT_VERSION,
+            )
+            .expect("unreachable test endpoint");
+            let session = crate::docker::exec::ExecSession::start(
+                client,
+                "container-id".into(),
+                "api".into(),
+                crate::docker::exec::ExecCommand::Sh,
+                height.saturating_sub(6).max(1),
+                width.saturating_sub(2).max(1),
+            );
+            let mut app = App::new();
+            app.open_exec(
+                session,
+                height.saturating_sub(6).max(1),
+                width.saturating_sub(2).max(1),
+            );
+            let backend = TestBackend::new(width, height);
+            let mut terminal = Terminal::new(backend).expect("test terminal");
+            terminal
+                .draw(|frame| draw_app(frame, &mut app))
+                .expect("render");
+        }
     }
 }

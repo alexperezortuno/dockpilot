@@ -78,9 +78,21 @@ Completed:
   - refresh incidents are independent per task context, command-palette `j`/`k` input is preserved, and task durations are measured from start to finish.
 - UX-006 local system information tab:
   - asynchronous local host collection for OS, kernel, CPU, load, memory, swap, disks, networks, and Dockpilot runtime data.
-  - local system data remains available when Docker is disconnected and never follows a remote Docker context.
+   - local system data remains available when Docker is disconnected and never follows a remote Docker context.
+- UX-008 unified logs:
+  - dedicated Logs tab with a bounded global buffer, cached viewport, stable selection, and dropped-event count.
+  - interactive container, Compose project/service, severity, time, and text filters plus incremental search/navigation.
+  - independent follow/pause controls and TXT/JSONL export controls preserve origin and timestamps; exports warn users that source logs may contain secrets.
+  - stream assembly preserves fragmented UTF-8 lines and bounds individual line size.
+  - global ordering across streams is approximate and does not guarantee causal ordering.
 
-The current TUI provides dashboard, container, image, network, volume, project, system, and help tabs. The System tab reports local host identity, CPU, memory, swap, disks, network interfaces, and Dockpilot runtime details. It never reports remote Docker hosts or secrets. Legacy Docker Machine support was removed; use Docker contexts for local, TCP, or SSH engines.
+  UX-009 Compose workspace (in progress):
+  - discovers Engine-backed projects from official Compose labels using the active Docker context;
+  - groups services and containers, including stopped containers when Docker reports them;
+  - renders asynchronous status, health, replica count, image, published ports, restart totals, and uptime in the Project tab;
+  - local Compose file registration is available in the Project actions; resolved dependencies, contextual actions, and direct Unified Logs navigation remain pending.
+
+The current TUI provides dashboard, container, unified logs, image, network, volume, project, system, and help tabs. The System tab reports local host identity, CPU, memory, swap, disks, network interfaces, and Dockpilot runtime details. It never reports remote Docker hosts or secrets. Legacy Docker Machine support was removed; use Docker contexts for local, TCP, or SSH engines.
 
 > Important: The dedicated log buffer is bounded to 2,000 lines, and general command output uses the configured bounded `VecDeque`. Safety policy is configured at startup; safe mode confirms mutations, destructive actions always require confirmation, and read-only mode blocks mutations.
 
@@ -240,6 +252,8 @@ The `f` filter opens the existing parameter prompt. `/` applies an incremental f
 
 Notifications are transient by default. Critical errors and pending safety confirmations remain visible until dismissed with `Backspace`; detailed task output remains in the bounded output history.
 
+  When a running container is selected, `a` or the command palette offers an interactive Exec session. Choose `/bin/sh`, `/bin/bash`, or a custom argv command. `Ctrl+C` is sent to the container; `Ctrl+]` detaches without stopping the remote process. Exec traffic is rendered in its own emulated terminal and is not added to general Output.
+
 Background refreshes run independently per resource interval and never chain all Docker queries. Successful background refreshes update tables silently; failures are grouped per resource/task until recovery. Metrics and healthchecks rotate fairly with list refreshes. Disable them with `R`.
 
 When the container table has focus, `Enter` inspects the selected container. Lifecycle mutations use Bollard and still pass through safe-mode confirmation and read-only policy checks.
@@ -255,7 +269,8 @@ When the container table has focus, `Enter` inspects the selected container. Lif
 ## Tabs
 
 - **Dashboard**: Docker Engine version, container health counts, and selected-container CPU/memory statistics.
-- **Container**: start/stop named containers, stop all containers, list containers, logs, create/remove, inspect process state, pause/unpause, update, and wait.
+- **Container**: start/stop named containers, stop all containers, list containers, logs, create/remove, inspect process state, pause/unpause, update, wait, and interactive Exec.
+- **Logs**: normalized bounded view of streamed container logs, with approximate cross-container ordering and Compose origin metadata.
 - **Image**: list images through Bollard, build, rebuild, remove, push, pull, save/load, and history with task progress.
 - **Project**: set the project folder, run Compose up/down/config, and start with a selected Compose profile.
 - **Network**: list networks through Bollard, create, and remove networks.
@@ -293,6 +308,7 @@ Phase 1 is complete. Phase 2 now has a non-fatal Docker Engine connection check 
 - Docker unavailability is shown as an actionable disconnected state.
 - Terminal state is restored after failures.
 - Secrets and credentials are never logged or stored.
+- Exec is blocked by read-only policy and uses the privileges configured inside the container, never host-root execution.
 
 ## Roadmap
 

@@ -4,9 +4,10 @@ use crate::{
         client::{
             ContainerLifecycle, ContainerRow, DashboardData, HealthSnapshot, ImageRow, NetworkRow,
             VolumeRow, apply_container_lifecycle, container_health, dashboard_data,
-            inspect_container, list_containers, list_images, list_networks, list_volumes,
-            start_all_containers,
+            inspect_container, list_compose_containers, list_containers, list_images,
+            list_networks, list_volumes, start_all_containers,
         },
+        exec::ExecCommand,
         metrics::container_stats,
         run_command, run_stop_all,
     },
@@ -26,6 +27,9 @@ pub enum TaskRequest {
     StopAll,
     StartAll,
     ListContainers,
+    ListComposeProjects {
+        context: String,
+    },
     ListImages,
     ListNetworks,
     ListVolumes,
@@ -55,6 +59,11 @@ pub enum TaskRequest {
     },
     Events,
     SystemInfo,
+    OpenExec {
+        id: String,
+        name: String,
+        command: ExecCommand,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,6 +80,7 @@ impl TaskRequest {
             Self::StopAll => Mutation::Destructive,
             Self::StartAll => Mutation::Mutating,
             Self::ListContainers => Mutation::ReadOnly,
+            Self::ListComposeProjects { .. } => Mutation::ReadOnly,
             Self::ListImages => Mutation::ReadOnly,
             Self::ListNetworks | Self::ListVolumes => Mutation::ReadOnly,
             Self::InspectContainer { .. } => Mutation::ReadOnly,
@@ -88,6 +98,7 @@ impl TaskRequest {
             Self::DiskUsage { .. } => Mutation::ReadOnly,
             Self::Events => Mutation::ReadOnly,
             Self::SystemInfo => Mutation::ReadOnly,
+            Self::OpenExec { .. } => Mutation::Mutating,
         }
     }
 
@@ -97,6 +108,9 @@ impl TaskRequest {
             Self::StopAll => "stop all containers".to_string(),
             Self::StartAll => "start all containers".to_string(),
             Self::ListContainers => "list containers".to_string(),
+            Self::ListComposeProjects { context } => {
+                format!("discover Compose projects ({context})")
+            }
             Self::ListImages => "list images".to_string(),
             Self::ListNetworks => "list networks".to_string(),
             Self::ListVolumes => "list volumes".to_string(),
@@ -127,6 +141,9 @@ impl TaskRequest {
             .to_string(),
             Self::Events => "stream Docker events".to_string(),
             Self::SystemInfo => "inspect local system".to_string(),
+            Self::OpenExec { name, command, .. } => {
+                format!("exec {} in {}", command.display(), name)
+            }
         }
     }
 }
@@ -156,6 +173,10 @@ pub enum TaskEvent {
         id: u64,
         containers: Vec<ContainerRow>,
     },
+    ComposeProjects {
+        id: u64,
+        projects: Vec<crate::docker::compose::ComposeProject>,
+    },
     Images {
         id: u64,
         images: Vec<ImageRow>,
@@ -170,6 +191,9 @@ pub enum TaskEvent {
     },
     LogLine {
         line: String,
+    },
+    UnifiedLog {
+        event: crate::app::unified_logs::LogEvent,
     },
     Dashboard {
         id: u64,
@@ -197,7 +221,7 @@ pub enum TaskEvent {
 pub struct TaskManager {
     sender: mpsc::Sender<TaskEvent>,
     receiver: mpsc::Receiver<TaskEvent>,
-    active: Option<(u64, JoinHandle<()>)>,
+    active: Option<(u64, JoinHandle<()>, bool)>,
     client: Option<bollard::Docker>,
     next_id: u64,
 }
@@ -237,6 +261,10 @@ impl TaskManager {
 
         let id = self.next_id;
         self.next_id += 1;
+        let is_stream = matches!(
+            &request,
+            TaskRequest::ContainerLogs { .. } | TaskRequest::Events
+        );
         let sender = self.sender.clone();
         let client = self.client.clone();
         let handle = tokio::spawn(async move {
@@ -258,6 +286,9 @@ impl TaskManager {
                 TaskRequest::StopAll => "stopping active containers".to_string(),
                 TaskRequest::StartAll => "starting stopped containers".to_string(),
                 TaskRequest::ListContainers => "querying containers".to_string(),
+                TaskRequest::ListComposeProjects { .. } => {
+                    "discovering Compose projects".to_string()
+                }
                 TaskRequest::ListImages => "querying images".to_string(),
                 TaskRequest::ListNetworks => "querying networks".to_string(),
                 TaskRequest::ListVolumes => "querying volumes".to_string(),
@@ -288,6 +319,7 @@ impl TaskManager {
                 .to_string(),
                 TaskRequest::Events => "streaming Docker events".to_string(),
                 TaskRequest::SystemInfo => "querying local system".to_string(),
+                TaskRequest::OpenExec { name, .. } => format!("opening exec session in {}", name),
             };
             if sender
                 .send(TaskEvent::Progress {
@@ -387,6 +419,34 @@ impl TaskManager {
                                 id,
                                 message: "Docker Engine disconnected; cannot list containers"
                                     .to_string(),
+                            })
+                            .await;
+                    }
+                },
+                TaskRequest::ListComposeProjects { context } => match client {
+                    Some(client) => match list_compose_containers(&client).await {
+                        Ok(containers) => {
+                            let projects =
+                                crate::docker::compose::discover_projects(&context, containers);
+                            let _ = sender
+                                .send(TaskEvent::ComposeProjects { id, projects })
+                                .await;
+                        }
+                        Err(error) => {
+                            let _ = sender
+                                .send(TaskEvent::Failed {
+                                    id,
+                                    message: format!("Compose discovery failed: {}", error),
+                                })
+                                .await;
+                        }
+                    },
+                    None => {
+                        let _ = sender
+                            .send(TaskEvent::Failed {
+                                id,
+                                message: "Docker Engine disconnected; Compose projects unavailable"
+                                    .into(),
                             })
                             .await;
                     }
@@ -542,17 +602,49 @@ impl TaskManager {
                             .tail("200")
                             .build();
                         let mut stream = client.logs(&container_id, Some(options));
+                        let mut assemblers = [
+                            crate::app::unified_logs::LineAssembler::new(64 * 1024),
+                            crate::app::unified_logs::LineAssembler::new(64 * 1024),
+                        ];
                         while let Some(result) = stream.next().await {
                             match result {
                                 Ok(output) => {
-                                    for line in output.to_string().lines() {
-                                        if sender
-                                            .send(TaskEvent::LogLine {
-                                                line: line.to_string(),
+                                    let stream = match &output {
+                                        bollard::container::LogOutput::StdErr { .. } => {
+                                            crate::app::unified_logs::LogStream::Stderr
+                                        }
+                                        _ => crate::app::unified_logs::LogStream::Stdout,
+                                    };
+                                    let raw = match &output {
+                                        bollard::container::LogOutput::StdOut { message }
+                                        | bollard::container::LogOutput::StdErr { message }
+                                        | bollard::container::LogOutput::Console { message }
+                                        | bollard::container::LogOutput::StdIn { message } => {
+                                            message
+                                        }
+                                    };
+                                    let stream_index = usize::from(
+                                        stream == crate::app::unified_logs::LogStream::Stderr,
+                                    );
+                                    for line in assemblers[stream_index].push(raw) {
+                                        let (timestamp, message) =
+                                            crate::app::unified_logs::split_timestamp(&line);
+                                        let _ = sender
+                                            .send(TaskEvent::UnifiedLog {
+                                                event: crate::app::unified_logs::LogEvent {
+                                                    sequence: 0,
+                                                    container_id: container_id.clone(),
+                                                    container_name: container_id.clone(),
+                                                    compose_project: None,
+                                                    compose_service: None,
+                                                    timestamp,
+                                                    stream,
+                                                    message: message.to_string(),
+                                                    severity: crate::app::logs::classify(message),
+                                                },
                                             })
-                                            .await
-                                            .is_err()
-                                        {
+                                            .await;
+                                        if sender.send(TaskEvent::LogLine { line }).await.is_err() {
                                             return;
                                         }
                                     }
@@ -784,10 +876,21 @@ impl TaskManager {
                     };
                     let _ = sender.send(TaskEvent::System { id, snapshot }).await;
                 }
+                TaskRequest::OpenExec { .. } => {
+                    // Exec sessions are intercepted by the event loop and run
+                    // outside the single-task manager; reaching this arm is a bug.
+                    let _ = sender
+                        .send(TaskEvent::Failed {
+                            id,
+                            message: "exec sessions are managed outside the task manager"
+                                .to_string(),
+                        })
+                        .await;
+                }
             }
         });
 
-        self.active = Some((id, handle));
+        self.active = Some((id, handle, is_stream));
         true
     }
 
@@ -799,17 +902,25 @@ impl TaskManager {
         if self
             .active
             .as_ref()
-            .is_some_and(|(active_id, _)| *active_id == id)
+            .is_some_and(|(active_id, _, _)| *active_id == id)
         {
             self.active = None;
         }
     }
 
     pub fn cancel(&mut self) -> bool {
-        if let Some((id, handle)) = self.active.take() {
+        if let Some((id, handle, _)) = self.active.take() {
             let _ = self.sender.try_send(TaskEvent::Cancelled { id });
             handle.abort();
             true
+        } else {
+            false
+        }
+    }
+
+    pub fn cancel_stream(&mut self) -> bool {
+        if self.active.as_ref().is_some_and(|(_, _, stream)| *stream) {
+            self.cancel()
         } else {
             false
         }
@@ -867,6 +978,18 @@ mod tests {
         }
         manager.cancel();
         panic!("task did not publish its origin");
+    }
+
+    #[tokio::test]
+    async fn only_a_log_stream_can_be_preempted_for_a_user_action() {
+        let mut manager = TaskManager::new(4);
+        assert!(manager.spawn(TaskRequest::ContainerLogs {
+            id: "container-id".into(),
+            follow: true,
+            timestamps: true,
+        }));
+        assert!(manager.cancel_stream());
+        assert!(!manager.cancel_stream());
     }
 
     #[test]

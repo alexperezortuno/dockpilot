@@ -13,6 +13,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use docker::client::{
     EngineConnection, dashboard_data, list_containers, list_images, list_networks, list_volumes,
 };
+use docker::exec::ExecSession;
 use ratatui::{Terminal, backend::CrosstermBackend};
 use security::SafetyPolicy;
 use std::{
@@ -76,6 +77,7 @@ fn dispatch_request(
     task_manager: &mut TaskManager,
     policy: SafetyPolicy,
     pending_confirmation: &mut Option<TaskRequest>,
+    exec_client: &Option<bollard::Docker>,
     request: TaskRequest,
     confirmed: bool,
 ) {
@@ -108,6 +110,39 @@ fn dispatch_request(
         *pending_confirmation = Some(request);
         return;
     }
+    if let TaskRequest::OpenExec { id, name, command } = request {
+        // The session is bound to the client captured here; a context change
+        // cannot silently redirect an active session to another Engine.
+        match exec_client {
+            Some(client) => {
+                let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+                let view_rows = rows.saturating_sub(6).max(1);
+                let view_cols = cols.saturating_sub(2).max(1);
+                let session = ExecSession::start(
+                    client.clone(),
+                    id,
+                    name.clone(),
+                    command,
+                    view_rows,
+                    view_cols,
+                );
+                app.open_exec(session, view_rows, view_cols);
+                app.push_output(format!("[exec] attaching to {}", name));
+            }
+            None => {
+                app.push_output("[exec] Docker Engine disconnected; cannot start exec session");
+                app.notify(
+                    NotificationKind::Error,
+                    "Exec unavailable: Docker Engine disconnected",
+                    true,
+                );
+            }
+        }
+        return;
+    }
+    // A follow/events stream occupies the single task slot. User mutations take
+    // priority and stop only that stream before being dispatched.
+    task_manager.cancel_stream();
     if !task_manager.spawn(request) {
         app.push_output("[Task in progress: press x to cancel]");
         app.notify(
@@ -115,6 +150,53 @@ fn dispatch_request(
             "A task is already in progress",
             false,
         );
+    }
+}
+
+/// Route a key press while an exec session owns the screen.
+fn handle_exec_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
+    enum After {
+        None,
+        InputRejected,
+        Closed(String),
+    }
+    let mut after = After::None;
+    if let Some(exec) = app.exec.as_mut() {
+        if modifiers.contains(KeyModifiers::CONTROL) && code == KeyCode::Char(']') {
+            if !exec.detach() {
+                after = After::InputRejected;
+            }
+        } else if exec.state.is_closed() {
+            if matches!(code, KeyCode::Esc | KeyCode::Enter) {
+                after = After::Closed(exec.state.label());
+            }
+        } else {
+            match (code, modifiers) {
+                (KeyCode::PageUp, m) if m.contains(KeyModifiers::SHIFT) => exec.scroll(10),
+                (KeyCode::PageDown, m) if m.contains(KeyModifiers::SHIFT) => exec.scroll(-10),
+                _ => {
+                    if let Some(bytes) = tui::exec_keys::encode_key(code, modifiers)
+                        && !exec.send_input(bytes)
+                    {
+                        after = After::InputRejected;
+                    }
+                }
+            }
+        }
+    }
+    match after {
+        After::InputRejected => {
+            app.notify(
+                NotificationKind::Warning,
+                "Exec input or detach request could not be queued",
+                false,
+            );
+        }
+        After::Closed(label) => {
+            app.close_exec();
+            app.push_output(format!("[exec] session {}", label));
+        }
+        After::None => {}
     }
 }
 
@@ -132,6 +214,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::with_project_folder(config.project_folder.clone());
+    app.set_docker_context(config.docker_context.as_deref().unwrap_or("default"));
     app.set_policy(policy);
     app.set_output_capacity(config.output_capacity);
     app.set_theme(config.theme);
@@ -148,6 +231,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let engine_client = engine_connection.into_client();
     app.set_engine_status(engine_status);
     app.push_output(format!("[docker] {}", engine_status_display));
+    let exec_client = engine_client.clone();
     let mut task_manager = TaskManager::new(32);
     task_manager.set_client(engine_client);
     task_manager.spawn_with_origin(TaskRequest::SystemInfo, TaskOrigin::System);
@@ -168,6 +252,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     while !should_quit {
         app.tick();
+        // Drain interactive exec traffic outside the task manager.
+        let (exec_changed, exec_closed, exec_detached) = if let Some(exec) = app.exec.as_mut() {
+            let was_closed = exec.state.is_closed();
+            let changed = exec.drain();
+            let closed = (!was_closed && exec.state.is_closed()).then(|| exec.state.label());
+            (changed, closed, exec.detach_confirmed())
+        } else {
+            (false, None, false)
+        };
+        if exec_changed {
+            app.mark_dirty();
+        }
+        if let Some(label) = exec_closed {
+            app.notify(
+                NotificationKind::Warning,
+                format!("Exec session {}", label),
+                false,
+            );
+        }
+        if exec_detached {
+            let name = app
+                .exec
+                .as_ref()
+                .map(|exec| exec.session.container_name.clone())
+                .unwrap_or_default();
+            app.close_exec();
+            app.push_output(format!(
+                "[exec] detached from {} (remote process keeps running)",
+                name
+            ));
+            app.notify(NotificationKind::Info, "Exec session detached", false);
+        }
         while let Some(task_event) = task_manager.try_next() {
             match task_event {
                 TaskEvent::Started {
@@ -184,7 +300,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     app.set_task_status(format!("task {}: {}", id, message));
                 }
                 TaskEvent::Finished { id, lines } => {
-                    let (origin, _) = task_origins
+                    let (origin, description) = task_origins
                         .remove(&id)
                         .unwrap_or((TaskOrigin::User, String::new()));
                     app.finish_task(id, TaskState::Completed);
@@ -198,6 +314,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                     }
                     task_manager.complete(id);
+                    if origin == TaskOrigin::User
+                        && (description.starts_with("start container ")
+                            || description.starts_with("stop container ")
+                            || description.starts_with("restart container ")
+                            || description.starts_with("pause container ")
+                            || description.starts_with("unpause container "))
+                    {
+                        task_manager
+                            .spawn_with_origin(TaskRequest::ListContainers, TaskOrigin::Background);
+                    }
                 }
                 TaskEvent::Failed { id, message } => {
                     let (origin, description) = task_origins
@@ -248,9 +374,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         app.notify(NotificationKind::Info, "Docker refresh recovered", false);
                     }
                     task_manager.complete(id);
+                    if origin != TaskOrigin::User {
+                        task_manager.spawn_with_origin(
+                            TaskRequest::ListComposeProjects {
+                                context: app.docker_context.clone(),
+                            },
+                            TaskOrigin::System,
+                        );
+                    }
+                }
+                TaskEvent::ComposeProjects { id, projects } => {
+                    let (origin, description) = task_origins
+                        .remove(&id)
+                        .unwrap_or((TaskOrigin::User, String::new()));
+                    app.set_task_status("idle");
+                    app.set_compose_projects(projects);
+                    if origin == TaskOrigin::Background && app.refresh_recovered(&description) {
+                        app.notify(NotificationKind::Info, "Compose discovery recovered", false);
+                    }
+                    task_manager.complete(id);
                 }
                 TaskEvent::LogLine { line } => {
                     app.push_log_line(line);
+                }
+                TaskEvent::UnifiedLog { event } => {
+                    app.push_unified_log_event(event);
                 }
                 TaskEvent::EventLine { line, alert } => {
                     app.set_task_status("events");
@@ -425,13 +573,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             last_draw = Instant::now();
         }
 
-        if event::poll(poll_interval)?
-            && let Event::Key(KeyEvent {
-                code, modifiers, ..
-            }) = event::read()?
+        let effective_poll = if app.exec_active() {
+            poll_interval.min(Duration::from_millis(16))
+        } else {
+            poll_interval
+        };
+        let polled_event = if event::poll(effective_poll)? {
+            Some(event::read()?)
+        } else {
+            None
+        };
+        if let Some(Event::Resize(_, _)) = polled_event {
+            app.mark_dirty();
+        }
+        if let Some(Event::Key(KeyEvent {
+            code, modifiers, ..
+        })) = polled_event
         {
             app.mark_dirty();
-            if pending_confirmation.is_some() {
+            if app.exec_active() {
+                handle_exec_key(&mut app, code, modifiers);
+            } else if app.pending_unified_export.is_some() {
+                match code {
+                    KeyCode::Char('y') | KeyCode::Char('Y') => app.unified_logs_confirm_export(),
+                    KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                        app.unified_logs_cancel_export()
+                    }
+                    _ => {}
+                }
+            } else if pending_confirmation.is_some() {
                 match code {
                     KeyCode::Char('y') | KeyCode::Char('Y') => {
                         if let Some(request) = pending_confirmation.take() {
@@ -441,6 +611,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 &mut task_manager,
                                 policy,
                                 &mut pending_confirmation,
+                                &exec_client,
                                 request,
                                 true,
                             );
@@ -517,6 +688,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             _ => None,
                         },
+                        Overlay::UnifiedLogSearch => match code {
+                            KeyCode::Enter => {
+                                app.unified_log_view.search_active = true;
+                                app.overlay = Overlay::None;
+                                None
+                            }
+                            KeyCode::Esc => {
+                                app.unified_logs_close_search();
+                                app.overlay = Overlay::None;
+                                None
+                            }
+                            KeyCode::Backspace => {
+                                app.unified_logs_search_backspace();
+                                None
+                            }
+                            KeyCode::Char(c) => {
+                                app.unified_logs_search_push(c);
+                                None
+                            }
+                            _ => None,
+                        },
+                        Overlay::UnifiedLogFilter => match code {
+                            KeyCode::Enter => {
+                                app.unified_logs_filter_confirm();
+                                app.overlay = Overlay::None;
+                                None
+                            }
+                            KeyCode::Esc => {
+                                app.overlay = Overlay::None;
+                                None
+                            }
+                            KeyCode::Backspace => {
+                                app.unified_logs_filter_backspace();
+                                None
+                            }
+                            KeyCode::Char(c) => {
+                                app.unified_logs_filter_push(c);
+                                None
+                            }
+                            _ => None,
+                        },
                         Overlay::Context { .. } => match code {
                             KeyCode::Enter => app.context_request_selected(),
                             KeyCode::Esc => {
@@ -529,6 +741,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             KeyCode::Down | KeyCode::Char('j') => {
                                 app.context_move(1);
+                                None
+                            }
+                            _ => None,
+                        },
+                        Overlay::ExecCommand { .. } => match code {
+                            KeyCode::Enter => app.exec_choice_selected(),
+                            KeyCode::Esc => {
+                                app.overlay = Overlay::None;
+                                None
+                            }
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                app.exec_choice_move(-1);
+                                None
+                            }
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                app.exec_choice_move(1);
                                 None
                             }
                             _ => None,
@@ -570,6 +798,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             app.dismiss_notification();
                             None
                         }
+                        (KeyCode::Char(key), _) if key == shortcuts.toggle_focus => {
+                            app.toggle_focus();
+                            None
+                        }
                         (KeyCode::Char(key), _) if key == shortcuts.cancel_task => {
                             if task_manager.cancel() {
                                 app.notify(NotificationKind::Info, "Task cancelled", false);
@@ -577,7 +809,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             None
                         }
                         (KeyCode::Char(key), _) if key == shortcuts.refresh => {
-                            Some(TaskRequest::ListContainers)
+                            if matches!(app.current_tab, Tab::Project) {
+                                Some(TaskRequest::ListComposeProjects {
+                                    context: app.docker_context.clone(),
+                                })
+                            } else {
+                                Some(TaskRequest::ListContainers)
+                            }
                         }
                         (KeyCode::Char('R'), _) => {
                             app.toggle_auto_refresh();
@@ -597,13 +835,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         (KeyCode::Char('d'), _) => Some(app.dashboard_request()),
                         (KeyCode::Char('i'), _) => Some(TaskRequest::ListImages),
-                        (KeyCode::Char('n'), _) => Some(TaskRequest::ListNetworks),
+                        (KeyCode::Char('n'), _) if !matches!(app.current_tab, Tab::UnifiedLogs) => {
+                            Some(TaskRequest::ListNetworks)
+                        }
                         (KeyCode::Char('v'), _) => Some(TaskRequest::ListVolumes),
                         (KeyCode::Char('S'), _) => Some(TaskRequest::SystemInfo),
                         (KeyCode::Char('e'), _) => Some(TaskRequest::Events),
+                        (KeyCode::Char('g'), _) if !matches!(app.current_tab, Tab::UnifiedLogs) => {
+                            app.show_unified_logs();
+                            app.selected_container_id()
+                                .map(|id| TaskRequest::ContainerLogs {
+                                    id,
+                                    follow: true,
+                                    timestamps: true,
+                                })
+                        }
                         (KeyCode::Char('u'), _) => Some(TaskRequest::DiskUsage { preview: false }),
                         (KeyCode::Char('K'), _) => Some(TaskRequest::DiskUsage { preview: true }),
-                        (KeyCode::Char('f'), _) => {
+                        (KeyCode::Char('f'), _) if !matches!(app.current_tab, Tab::UnifiedLogs) => {
                             app.start_filter();
                             None
                         }
@@ -615,20 +864,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             app.start_context_menu();
                             None
                         }
-                        (KeyCode::Char(key), _) if key == shortcuts.toggle_focus => {
-                            app.toggle_focus();
-                            None
-                        }
                         (KeyCode::Char('s'), _) => {
                             app.toggle_container_sort();
                             None
                         }
                         (KeyCode::Char('p'), _) => {
-                            app.toggle_logs_paused();
+                            if matches!(app.current_tab, Tab::UnifiedLogs) {
+                                app.unified_logs_toggle_pause();
+                            } else {
+                                app.toggle_logs_paused();
+                            }
+                            None
+                        }
+                        (KeyCode::Char('F'), _) if matches!(app.current_tab, Tab::UnifiedLogs) => {
+                            app.unified_logs_toggle_follow();
+                            None
+                        }
+                        (KeyCode::Char('E'), _) if matches!(app.current_tab, Tab::UnifiedLogs) => {
+                            app.unified_logs_start_export(false, false);
+                            None
+                        }
+                        (KeyCode::Char('J'), _) if matches!(app.current_tab, Tab::UnifiedLogs) => {
+                            app.unified_logs_start_export(true, true);
+                            None
+                        }
+                        (KeyCode::Char('f'), _) if matches!(app.current_tab, Tab::UnifiedLogs) => {
+                            app.unified_logs_cycle_filter();
+                            None
+                        }
+                        (KeyCode::Char('n'), _) if matches!(app.current_tab, Tab::UnifiedLogs) => {
+                            app.unified_logs_next_match(false);
+                            None
+                        }
+                        (KeyCode::Char('N'), _) if matches!(app.current_tab, Tab::UnifiedLogs) => {
+                            app.unified_logs_next_match(true);
                             None
                         }
                         (KeyCode::Char('/'), _) => {
-                            if !app.log_lines.is_empty() {
+                            if matches!(app.current_tab, Tab::UnifiedLogs) {
+                                app.unified_logs_start_search();
+                            } else if !app.log_lines.is_empty() {
                                 app.start_log_filter();
                             } else if matches!(
                                 app.current_tab,
@@ -661,19 +936,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             None
                         }
                         (KeyCode::Up, _) => {
-                            app.previous();
+                            if matches!(app.current_tab, Tab::UnifiedLogs) {
+                                app.unified_logs_move(-1);
+                            } else {
+                                app.previous();
+                            }
                             None
                         }
                         (KeyCode::Down, _) => {
-                            app.next();
+                            if matches!(app.current_tab, Tab::UnifiedLogs) {
+                                app.unified_logs_move(1);
+                            } else {
+                                app.next();
+                            }
                             None
                         }
                         (KeyCode::Char('j'), _) => {
-                            app.next();
+                            if matches!(app.current_tab, Tab::UnifiedLogs) {
+                                app.unified_logs_move(1);
+                            } else {
+                                app.next();
+                            }
                             None
                         }
                         (KeyCode::Char('k'), _) => {
-                            app.previous();
+                            if matches!(app.current_tab, Tab::UnifiedLogs) {
+                                app.unified_logs_move(-1);
+                            } else {
+                                app.previous();
+                            }
+                            None
+                        }
+                        (KeyCode::Char('g'), _) if matches!(app.current_tab, Tab::UnifiedLogs) => {
+                            app.unified_logs_home();
+                            None
+                        }
+                        (KeyCode::Char('G'), _) if matches!(app.current_tab, Tab::UnifiedLogs) => {
+                            app.unified_logs_end();
                             None
                         }
                         (KeyCode::Char('?'), _) => {
@@ -707,6 +1006,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &mut task_manager,
                         policy,
                         &mut pending_confirmation,
+                        &exec_client,
                         request,
                         false,
                     );

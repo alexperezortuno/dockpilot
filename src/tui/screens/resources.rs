@@ -1,5 +1,6 @@
 use crate::app::{
-    App, ContainerAction, FocusTarget, ImageAction, NetworkAction, ProjectAction, Tab, VolumeAction,
+    App, ContainerAction, FocusTarget, ImageAction, NetworkAction, ProjectAction, ServiceAction,
+    Tab, VolumeAction,
 };
 use crate::tui::{
     Palette,
@@ -8,8 +9,153 @@ use crate::tui::{
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
+    style::{Color, Style},
     widgets::{Block, Borders, Cell, List, ListItem, Row},
 };
+use std::time::SystemTime;
+
+pub fn draw_project(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(32), Constraint::Percentage(68)])
+        .split(area);
+    let project_rows = app.compose_projects.iter().map(|project| {
+        let project_key = format!("{}:{}", project.context, project.name);
+        let expanded = app.expanded_projects.contains(&project_key);
+        let services = if expanded {
+            project
+                .services
+                .iter()
+                .map(|service| service.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        } else {
+            String::new()
+        };
+        Row::new(vec![Cell::from(format!(
+            "{} {} {}{}{}",
+            if expanded { "v" } else { ">" },
+            if project.source == crate::docker::compose::ProjectSource::Engine {
+                "E"
+            } else {
+                "L"
+            },
+            project.name,
+            if services.is_empty() { "" } else { " -> " },
+            services
+        ))])
+    });
+    table::draw_table(
+        f,
+        columns[0],
+        project_rows,
+        [Constraint::Min(12)],
+        ["Projects"].into_iter().map(Cell::from),
+        "Projects (E=Engine, L=local file)".to_string(),
+        &mut app.compose_project_table_state,
+        colors,
+    );
+    let selected = app
+        .compose_project_table_state
+        .selected()
+        .and_then(|index| app.compose_projects.get(index));
+    let services = selected.map(|project| &project.services[..]).unwrap_or(&[]);
+    let project_key = selected.map(|p| format!("{}:{}", p.context, p.name));
+    let is_expanded = project_key
+        .as_ref()
+        .map(|k| app.expanded_projects.contains(k))
+        .unwrap_or(false);
+    let selected_service = is_expanded
+        .then(|| {
+            app.compose_service_list_state
+                .selected()
+                .and_then(|index| services.get(index))
+        })
+        .flatten();
+    if app.focus_target == FocusTarget::Actions {
+        if let Some(service) = selected_service {
+            table::draw_actions(
+                f,
+                columns[1],
+                &format!("Service Actions [{}]", service.name),
+                app.service_actions
+                    .iter()
+                    .map(|action| ListItem::new(service_label(action))),
+                &mut app.service_list_state,
+                colors,
+            );
+        } else {
+            table::draw_actions(
+                f,
+                columns[1],
+                "Compose Actions",
+                app.project_actions
+                    .iter()
+                    .map(|action| ListItem::new(project_label(action))),
+                &mut app.project_list_state,
+                colors,
+            );
+        }
+        return;
+    }
+    let service_rows = services.iter().map(|service| {
+        Row::new(vec![
+            Cell::from(service.name.clone()),
+            Cell::from(service.status()).style(status_style(&service.status())),
+            Cell::from(service.health()).style(health_style(&service.health())),
+            Cell::from(service.replicas()),
+            Cell::from(service.images()),
+            Cell::from(service.ports()),
+            Cell::from(service.restarts().to_string()),
+            Cell::from(service.uptime(SystemTime::now())),
+        ])
+    });
+    table::draw_table(
+        f,
+        columns[1],
+        service_rows,
+        [
+            Constraint::Min(12),
+            Constraint::Length(10),
+            Constraint::Length(12),
+            Constraint::Length(7),
+            Constraint::Min(16),
+            Constraint::Min(12),
+            Constraint::Length(8),
+            Constraint::Length(10),
+        ],
+        [
+            "Name", "Status", "Health", "#", "Image", "Ports", "Restarts", "Uptime",
+        ]
+        .into_iter()
+        .map(Cell::from),
+        format!(
+            "Services [{}]",
+            selected.map_or("none", |project| project.name.as_str())
+        ),
+        &mut app.compose_service_list_state,
+        colors,
+    );
+}
+
+fn status_style(status: &str) -> Style {
+    Style::default().fg(match status {
+        "running" => Color::Green,
+        "partial" => Color::Yellow,
+        "stopped" => Color::Red,
+        _ => Color::Gray,
+    })
+}
+
+fn health_style(health: &str) -> Style {
+    Style::default().fg(match health {
+        "healthy" => Color::Green,
+        "unhealthy" => Color::Red,
+        "starting" => Color::Yellow,
+        "no-check" | "unavailable" => Color::Gray,
+        _ => Color::White,
+    })
+}
 
 pub fn draw(f: &mut Frame, app: &mut App, area: Rect, colors: Palette) {
     let show_secondary = app.show_details || app.focus_target == FocusTarget::Actions;
@@ -404,9 +550,21 @@ fn volume_label(action: &VolumeAction) -> &'static str {
 fn project_label(action: &ProjectAction) -> &'static str {
     match action {
         ProjectAction::SetFolder => "Set Project Folder",
+        ProjectAction::RegisterFolder => "Register Compose Folder",
         ProjectAction::ComposeUp => "Compose Up",
         ProjectAction::ComposeUpProfile => "Compose Up (Profile)",
         ProjectAction::ComposeDown => "Compose Down",
         ProjectAction::ComposeConfig => "Compose Config",
+    }
+}
+
+fn service_label(action: &ServiceAction) -> &'static str {
+    match action {
+        ServiceAction::Start => "Start Service",
+        ServiceAction::Stop => "Stop Service",
+        ServiceAction::Restart => "Restart Service",
+        ServiceAction::Logs => "View Service Logs",
+        ServiceAction::Recreate => "Recreate Service",
+        ServiceAction::Scale => "Scale Service",
     }
 }
