@@ -616,8 +616,7 @@ async fn connect_for_context(context: &str) -> Result<Docker, String> {
         .map_err(|error| format!("invalid Docker context {} output: {}", context, error))?;
 
     if host.starts_with("ssh://") {
-        Docker::connect_with_ssh(&host, 120, bollard::API_DEFAULT_VERSION)
-            .map_err(|error| error.to_string())
+        connect_with_ssh_context(&host)
     } else if host.starts_with("unix://") || host.starts_with("npipe://") {
         Docker::connect_with_socket(&host, 120, bollard::API_DEFAULT_VERSION)
             .map_err(|error| error.to_string())
@@ -625,6 +624,17 @@ async fn connect_for_context(context: &str) -> Result<Docker, String> {
         Docker::connect_with_http(&host, 120, bollard::API_DEFAULT_VERSION)
             .map_err(|error| error.to_string())
     }
+}
+
+#[cfg(not(windows))]
+fn connect_with_ssh_context(host: &str) -> Result<Docker, String> {
+    Docker::connect_with_ssh(host, 120, bollard::API_DEFAULT_VERSION)
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(windows)]
+fn connect_with_ssh_context(_host: &str) -> Result<Docker, String> {
+    Err("Docker contexts using SSH are not supported on Windows".to_string())
 }
 
 fn parse_context_host(output: &[u8]) -> Result<String, String> {
@@ -653,6 +663,17 @@ mod tests {
         assert_eq!(
             parse_context_host(br#""unix:///var/run/docker.sock""#).unwrap(),
             "unix:///var/run/docker.sock"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rejects_ssh_contexts_on_windows() {
+        assert_eq!(
+            super::connect_with_ssh_context("ssh://example")
+                .err()
+                .unwrap(),
+            "Docker contexts using SSH are not supported on Windows"
         );
     }
 }
