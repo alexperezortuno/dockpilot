@@ -1,3 +1,5 @@
+<img src="dockpilot.png" alt="Dockpilot screenshot" width="800">
+
 # Dockpilot
 
 Dockpilot is a keyboard-first Rust TUI for managing Docker Engine and Docker Compose workflows. The project is intentionally scoped to Docker only: Podman, Kubernetes, generic container-engine abstractions, and a web dashboard are out of scope.
